@@ -17,10 +17,10 @@ setuptools.setup(
     description="Graphlet enumeration and analysis toolkit",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://lisdi-git.lanl.gov/un_graphlets/buhito",
+    url="https://github.com/lanl/buhito",
     project_urls={
-        "Bug Tracker": "https://lisdi-git.lanl.gov/un_graphlets/buhito/-/issues",
-        "Source Code": "https://lisdi-git.lanl.gov/un_graphlets/buhito",
+        "Bug Tracker": "https://github.com/lanl/buhito/issues",
+        "Source Code": "https://github.com/lanl/buhito",
     },
     packages=setuptools.find_packages(where="src"),
     package_dir={"": "src"},

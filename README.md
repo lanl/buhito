@@ -7,14 +7,14 @@
 
 ### With pip
 ```bash
-git clone https://lisdi-git.lanl.gov/un_graphlets/buhito.git
+git clone https://github.com/lanl/buhito.git
 cd buhito
 pip install -e .
 ```
 
 ### With conda
 ```bash
-git clone https://lisdi-git.lanl.gov/un_graphlets/buhito.git
+git clone https://github.com/lanl/buhito.git
 cd buhito
 ```
 if creating a new conda environment:
