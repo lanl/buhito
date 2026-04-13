@@ -1,0 +1,56 @@
+[build-system]
+requires=["setuptools>=64"]
+build-backend="setuptools.build_meta"
+
+[project]
+name="buhito"
+version = "0.0.0"
+authors=[{name="Buhito Developers",email="un_graphlets@lanl.gov"}]
+description="buhito is a Python library for graph analysis and machine learning"
+requires-python=">=3.9"
+license={text="BSD 3-Clause License"}
+classifiers=[
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Software Development :: Libraries",
+]
+readme="README.rst"
+dependencies=[
+    "numpy",
+    "networkx",
+    "pandas",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+docs=[
+    "sphinx>=8.0",
+    "sphinx_rtd_theme>=3.0.0rc1",
+    "sphinxcontrib-bibtex>=2.6",
+]
+
+tests=[
+    "pytest>=8.3",
+    "tqdm",
+]
+
+full=[
+    "scipy",
+    "numba",
+    "matplotlib",
+    "tqdm",
+    "graphviz",
+    "triton-lang",
+]
+
+[tool.pytest.ini_options]
+addopts = "-v"
+testpaths = ["tests"]
+markers = [
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]      
