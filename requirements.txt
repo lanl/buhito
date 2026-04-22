@@ -10,5 +10,6 @@ tqdm>=4.64.0
 rdkit>=2022.9.0
 matplotlib>=3.6.0
 pillow>=9.0.0
+pydot>=4.0.1
 
 pytest>=7.2.0
