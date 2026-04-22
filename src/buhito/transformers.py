@@ -161,7 +161,7 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
                 self.X_unseen_ = self.X_unseen_.astype(float)
 
         self.transform_time_ = (time() - start) / len(X)  # .shape[0]
-        self._print(f"Sparse Transform time: {sigfig.round(self.transform_time_, sigfigs=3)} s/mol")
+        self._print(f"Sparse Transform time: {round(self.transform_time_, 3)} s/mol")
 
         if return_unseen:
             return M_seen, self.X_unseen_

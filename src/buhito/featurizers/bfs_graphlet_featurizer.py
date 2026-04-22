@@ -82,7 +82,20 @@ def graphlet_hash(glet: frozenset,
     
     elif len(glet)==2:
             # Include bond key in hash
-            g1, g2 = ancestor_graph[glet]
+            # Get the two nodes and create single-node graphlets
+            nodes = sorted(list(glet))  # Sort for consistent ordering
+            g1 = frozenset({nodes[0]})
+            g2 = frozenset({nodes[1]})
+            
+            # These should have been hashed already
+            if g1 not in current_hashes or g2 not in current_hashes:
+                # Fallback: hash them now if not already hashed
+                for single_node_glet in [g1, g2]:
+                    if single_node_glet not in current_hashes:
+                        n = list(single_node_glet)[0]
+                        nkey = G.nodes[n][node_key]
+                        current_hashes[single_node_glet] = hash_function(nkey)
+            
             h1 = current_hashes[g1]
             h2 = current_hashes[g2]
             a1 = list(g1)[0]
@@ -107,13 +120,14 @@ def graphlet_hash(glet: frozenset,
         return h
 
 
-def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=True, full_hash=True, node_key="atom_key",edge_key="bond_key"):
+def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None, return_nodewise=True, full_hash=True, node_key="atom_key",edge_key="bond_key"):
     """_summary_
 
     Args:
         G (_type_): input graph in networkx.
         depth (_type_): _description_
         whitelist (_type_, optional): Use induced graph with the set of nodes in whitelist. Defaults to None.
+        start_nodes (_type_, optional): Nodes to start BFS from. If None, start from all nodes in whitelist. Defaults to None.
         return_nodewise (bool, optional): Return node-wese fingerprints and bitinfo. Defaults to True.
         full_hash (bool, optional): Use all ancestors for hashing. Defaults to True. If False, only use parents for hashing.
 
@@ -129,6 +143,10 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
         raise ValueError(f"Code doesn't handle depth value {depth!r}, only depth >= 1")
     if whitelist is None:
         whitelist = set(G.nodes)
+    if start_nodes is None:
+        start_nodes = whitelist
+    else:
+        start_nodes = set(start_nodes) & whitelist  # Ensure start_nodes are in whitelist
 
     current_graphlets: set[frozenset] = set(frozenset([n]) for n in G.nodes if n in whitelist)
 
@@ -148,6 +166,10 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
             parent_graph[next_glet].add(glet)
             ancestor_graph[next_glet].add(glet)
             ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
+            # For size-2 graphlets, explicitly add single-node ancestors needed for hashing
+            if len(next_glet) == 2:
+                for node in next_glet:
+                    ancestor_graph[next_glet].add(frozenset({node}))
     else:
         # Only hash with the parent graph, not full ancestors.
         def add_hash(glet):
@@ -155,8 +177,13 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
 
         def link_glet(glet, next_glet):
             parent_graph[next_glet].add(glet)
+            # For size-2 graphlets with parent_graph, explicitly add single-node ancestors needed for hashing
+            if len(next_glet) == 2:
+                for node in next_glet:
+                    parent_graph[next_glet].add(frozenset({node}))
     
     # setup size 1 graphlets
+    # Initialize ALL size-1 graphlets
     for node in G.nodes:
         if node not in whitelist:
             continue
@@ -166,9 +193,11 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
                 continue
             frontier.add(neigh)
         glet = frozenset([node])
-
         current_graphlets[glet] = frontier
         all_graphlets.add(glet)
+    
+    # If start_nodes is specified, we'll only expand from those nodes in the main loop
+    # For now, current_graphlets contains all size-1 graphlets with their frontiers
 
     # Now continue with larger graphlets. Not parallelizable.
     for size in range(2, depth+1): # stop when size is equal to depth.
@@ -180,6 +209,17 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
             
             # Since that parents/ancestors from previous rounds are complete, hash the graphlet.
             add_hash(glet)
+            
+            # For size-2, only expand from start_nodes if specified
+            skip_expansion = False
+            if size == 2 and start_nodes is not None:
+                # Only expand from graphlets that contain a start_node
+                if not any(node in start_nodes for node in glet):
+                    skip_expansion = True
+            
+            if skip_expansion:
+                continue
+            
             # Construct successor graphlets
             for neigh in frontier:
                 # Make the next graphlet by adding a frontier element to the cluster
