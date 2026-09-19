@@ -1,32 +1,13 @@
 # buhito
-<img src="assets/buhito_icon.svg" alt="Logo" width="500">
+<img src="https://raw.githubusercontent.com/lanl/buhito/main/assets/buhito_icon.svg" alt="Logo" width="500">
 
 **buhito** is a Python library for enumerating graphlets and analyzing graphlet-based features from graphs. 
 
 ## Installation
-
-### With pip
 ```bash
 git clone https://github.com/lanl/buhito.git
 cd buhito
-pip install -e .
-```
-
-### With conda
-```bash
-git clone https://github.com/lanl/buhito.git
-cd buhito
-```
-if creating a new conda environment:
-```bash
-conda env create -n buhito --file env.yml
-```
-if installing into an existing conda environment:
-```bash
-conda env update -n <ENV_NAME> -f env.yml
-```
-```bash
-pip install -e .
+uv sync --all-extras
 ```
 
 ## Quick Start
@@ -69,7 +50,17 @@ Available example scripts:
 
 - `examples/plotting_example.py` — visualize graphlets from the Petersen graph
 - `examples/qm9/benchmark_graphlet_featurizers_train_test.py` — benchmark featurizers on QM9 chemical properties data
-- `examples/reddit_example/reddit_graphlets_example.py` — network graphlet analysis for REDDIT-5K graphs
+
+## Run Examples
+### QM9
+```sh
+python examples/qm9/benchmark_graphlet_featurizers_train_test.py \
+  --data examples/qm9/qm9data/qm9_processed.csv \
+  --max-len 2 3 4 5 6 \
+  --repeats 3 \
+  --n-jobs -1 \
+  --outdir bench_qm9
+```
 
 ## Testing
 
