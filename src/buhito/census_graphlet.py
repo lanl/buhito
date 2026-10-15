@@ -221,11 +221,9 @@ class Census():
         labels = self._pynauty_label(inputs)
         return Counter(labels)
 
-    def featurizer(self):
-        return dict(self.take()), None
-
-
+    
 if __name__ == '__main__':
+    # Following are tests
     g = nx.petersen_graph()
     # unlabelled, all graphlets
     c = Census(g, graphlet_sizes = [x for x in range(1,10)] )
