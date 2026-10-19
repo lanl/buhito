@@ -260,7 +260,7 @@ if __name__ == '__main__':
     g = nx.petersen_graph()
     
     # unlabelled, all graphlets
-    graphlets = take_census(g, graphlet_sizes = [x for x in range(1,10)] , save="test_census")
+    graphlets = take_census(g, graphlet_sizes = [x for x in range(1,10)] )
     assert set({(len(info), number) for info, number in graphlets.items()}) == set({ (9, 10), (3, 30), (6, 15), (7, 20), (6, 10), (8, 15), (7, 30), (5, 60), (8, 30), (4, 10), (6, 60), (4, 60), (1, 10), (7, 60), (5, 12), (2, 15) })  
 
     # count only some graphlets
