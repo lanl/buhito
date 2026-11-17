@@ -1,7 +1,6 @@
 """
 Depth-first calculation of graphlet histogram with recursive hash.
 """
-from functools import lru_cache
 import hashlib
 import re
 
@@ -113,6 +112,10 @@ class HashHelper():
     def __init__(self, graph, maxlen):
         self.graph=graph
         self.maxlen=maxlen
+        # Memo of node-set -> hash. It lives on the instance (one per graph) so that
+        # it is freed together with the graph, instead of in a process-wide
+        # lru_cache keyed by (self, indices) which would pin every graph forever.
+        self.memo={}
 
     @staticmethod
     def custom_hash(obj):
@@ -120,8 +123,11 @@ class HashHelper():
         hash_int = int(hashlib.sha1(s).hexdigest(), 16)
         return hash_int
 
-    @lru_cache(maxsize=None) # very important, this is memoized.
     def __call__(self, indices):
+        # very important, this is memoized (per graph, see __init__).
+        memo = self.memo
+        if indices in memo:
+            return memo[indices]
 
         if len(indices)==1:
             # Just hash atom key
@@ -129,6 +135,7 @@ class HashHelper():
             akey = self.graph.nodes[a]['atom_key']
             h = self.custom_hash(akey)
 
+            memo[indices] = h
             return h
         
         if len(indices)==2:
@@ -138,6 +145,7 @@ class HashHelper():
             btype = self.graph.edges[a1,a2]['bond_key']
             h3 = self.custom_hash(btype)
             h = self.custom_hash(tuple(sorted((h1, h2, h3))))
+            memo[indices] = h
             return h
         
         # hash abd count of all substructures of this structure that are at most one smaller than this one.
@@ -150,6 +158,7 @@ class HashHelper():
         this_hashkey = tuple(sorted(sub_hashes.items()))
         h = self.custom_hash(this_hashkey)
 
+        memo[indices] = h
         return h
                                  
 
