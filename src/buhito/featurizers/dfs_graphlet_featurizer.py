@@ -73,13 +73,19 @@ def search_subgraphs_from_cluster(G, depth, neighbors, yields_with, whitelist, f
 
     # go deeper!
 
+    # Children at depth 1 yield and return without reading their neighbors,
+    # so do not build the (never used) neighbor set for them.
+    children_expand = depth > 2
     for n in neighbors:
         # next_neighbors = active_neighbors(G, n, neighbors, whitelist, yields_with)
         # the above gets called enough that inlining actually helps.
         yields_with.add(n) # add to current set for yielding
-        next_neighbors={n for n in (*neighbors, *G.neighbors(n))
-         if n in whitelist
-         and n not in yields_with}
+        if children_expand:
+            next_neighbors={n for n in (*neighbors, *G.neighbors(n))
+             if n in whitelist
+             and n not in yields_with}
+        else:
+            next_neighbors=()
         # inception!
         yield from search_subgraphs_from_cluster(G,depth-1,next_neighbors,yields_with,
                                                  whitelist,found)
