@@ -10,104 +10,100 @@ from collections import Counter, defaultdict
 
 from buhito.utilities import sorted_hash_counts
 
-class DFSGraphletFeaturizer():     
-    def __init__(self, max_len=3):
-        """A class to produce graphlets on graphs using breadth-first search.
+class DFSGraphletFeaturizer():
+    def __init__(self, max_len=3, memo_scope='graph'):
+        """A class to produce graphlets on graphs using depth-first (rooted) search.
 
-        The size component of the bit ID corresponds to the number of nodes in the graphlet. 
-        
+        The size component of the bit ID corresponds to the number of nodes in the graphlet.
+
         :param max_len: int, the largest number of nodes to consider for induced subgraphs
+        :param memo_scope: 'graph' (default) keeps the hash memo for the whole graph;
+                           'root' clears it after every root node, which bounds working memory
+                           to one root's subtree at the price of recomputing some hashes.
+                           Both give identical fingerprints.
         """
-        
+
         self.size = max_len
+        self.memo_scope = memo_scope
         self.verbose = False
 
-        
-    def __call__(self, G): 
-        fp, bi = compute_subgraphs_dfs(G, 
-                                       maxlen=self.size)
+
+    def __call__(self, G):
+        fp, bi = compute_subgraphs_dfs(G,
+                                       maxlen=self.size,
+                                       memo_scope=self.memo_scope)
         # fp, bi = generate_subgraphs_depthwise(G=G,
-        #                                       maxlen=self.size)    
+        #                                       maxlen=self.size)
         return fp, bi
 
-# version with nice notation.
-# def active_neighbors(G,node,cur_neighbors,whitelist,yields_with):
-#     # The next things to check will be the neighbors of this neighbor one,
-#     # so long as they aren't already going to be checked!
-#     possible = cur_neighbors | set(G.neighbors(node))
-#     allowed = (possible - yields_with) & whitelist
-#     return allowed
-def active_neighbors(G,node,cur_neighbors,whitelist,yields_with):
-    """
-    Things in current neighbors or neighbors of a given node,
-    as long as in whitelist and not already in current cluster.
-    """
-    """note! this definition is inlined in search_subgraphs from cluster"""
-    return {n for n in (*cur_neighbors,*G.neighbors(node))
-                  if n in whitelist
-                  and n not in yields_with}
+def graph_adjacency(G):
+    """Neighbor sets of every node, without self loops. Built once per graph."""
+    return {v: set(G.neighbors(v)) - {v} for v in G.nodes}
 
-def generate_subgraphs_from_node(G, node, depth, whitelist):
+def generate_subgraphs_from_node(G, node, depth, whitelist, adj=None):
     """
-    Generate subgraphs starting from a specific node.
-    Essentially just sets up calculation for searching from cluster.
+    Generate every connected node set with at most `depth` nodes that contains `node`
+    and otherwise only nodes of `whitelist`, each set exactly once (as a frozenset).
+
+    This is the ESU rule (Wernicke): each partial set carries an extension set
+    (candidates that may be added next) and its closed neighborhood. A candidate
+    taken out of the extension set is never handed back to later siblings, and a
+    child only gains the *exclusive* neighbors of the node just added (neighbors
+    not already adjacent to the set). Every connected set containing `node` is
+    therefore produced by exactly one growth path, so no "found" set is needed.
+    Callers remove `node` from `whitelist` after this generator is exhausted so
+    that later roots never produce a set containing it.
     """
-    blacklist = ()
-    yields_with = {node}
-    neighbors = active_neighbors(G,node,set(),whitelist,yields_with)
-
-    yield from search_subgraphs_from_cluster(G,depth,neighbors,yields_with,whitelist,set())
-
-def search_subgraphs_from_cluster(G, depth, neighbors, yields_with, whitelist, found):
-    "Generate subgraphs from a given cluster."
-    # Depth-first type search
-    f_yw = frozenset(yields_with)
-    if f_yw in found:
-        # Already seen this thing, ignore it
-        return
-    found.add(f_yw)
-
-    yield yields_with
+    if adj is None:
+        adj = graph_adjacency(G)
+    root = frozenset((node,))
+    yield root
     if depth<=1: # stop recursion at some arbitrary integer.
         # Note: if you change this integer, you must change the hasher recursive call to generate_subgraphs!
         return
 
-    # go deeper!
-
-    # Children at depth 1 yield and return without reading their neighbors,
-    # so do not build the (never used) neighbor set for them.
-    children_expand = depth > 2
-    for n in neighbors:
-        # next_neighbors = active_neighbors(G, n, neighbors, whitelist, yields_with)
-        # the above gets called enough that inlining actually helps.
-        yields_with.add(n) # add to current set for yielding
-        if children_expand:
-            next_neighbors={n for n in (*neighbors, *G.neighbors(n))
-             if n in whitelist
-             and n not in yields_with}
-        else:
-            next_neighbors=()
-        # inception!
-        yield from search_subgraphs_from_cluster(G,depth-1,next_neighbors,yields_with,
-                                                 whitelist,found)
-        yields_with.remove(n) # remove from current set for yielding
+    allowed = set(whitelist) # copies; any container works
+    allowed.discard(node)
+    extension = adj[node] & allowed
+    # stack frames: (cluster, extension set, closed neighborhood of cluster, size of cluster)
+    stack = [(root, extension, set(extension), 1)]
+    while stack:
+        cluster, extension, neighborhood, size = stack.pop()
+        while extension:
+            n = extension.pop() # n leaves the extension set for all later siblings
+            next_cluster = cluster | {n}
+            yield next_cluster
+            if size + 1 < depth:
+                new_neighbors = adj[n] & allowed
+                stack.append((next_cluster,
+                              extension | (new_neighbors - neighborhood), # exclusive neighbors of n
+                              neighborhood | new_neighbors,
+                              size + 1))
 
     return
-    
 
-def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None):
+
+def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None, memo_scope='graph'):
     """
     G: networkx graph for molecule
     maxlen: size of
     hash_helper: used to compute hashes when this function is called recursively
     whitelist: subset of atoms in the molecule to consider.
+    memo_scope: 'graph' keeps the hash memo for the whole call, 'root' clears it after
+                every root node (bounded working memory, identical results).
     """
     # If hash_helper is None, we are generating fresh.
     # if hash_helper is not None, we are helping ourselves.
 
+    if memo_scope not in ('graph', 'root'):
+        raise ValueError(f"memo_scope must be 'graph' or 'root', got {memo_scope!r}")
+
     retain_counts=(hash_helper is None)
     if retain_counts:
         hash_helper=HashHelper(G,maxlen)
+    adj = getattr(hash_helper, 'adj', None)
+    if adj is None:
+        adj = graph_adjacency(G)
 
     all_subsets = set()
     if whitelist is None:
@@ -116,14 +112,15 @@ def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None):
         whitelist = set(whitelist) # copies if set, removes 'frozen' if frozenset
 
     for n in list(whitelist): # changes during iteration
-        for subset in generate_subgraphs_from_node(G,n,maxlen,whitelist):
-            subset = frozenset(subset)
-            h = hash_helper(subset)
-            if (subset,h) in all_subsets:
-                print(f"Subset {subset} with hash {h} is in all subsets already!")
-            all_subsets.add((subset,h))         
-            
+        for subset in generate_subgraphs_from_node(G,n,maxlen,whitelist,adj):
+            # each subset arrives exactly once, no duplicate check needed.
+            all_subsets.add((subset,hash_helper(subset)))
+
         whitelist.remove(n) # now never look at that node again
+        if retain_counts and memo_scope == 'root':
+            # hashes are a pure function of the labeled induced subgraph, so entries
+            # may be dropped and recomputed by later roots without changing any value.
+            hash_helper.memo.clear()
     if retain_counts:
         res = Counter((len(ss),h) for ss,h in all_subsets)
     else:
@@ -148,9 +145,9 @@ class HashHelper():
     def __init__(self, graph, maxlen):
         self.graph=graph
         self.maxlen=maxlen
-        # Memo of node-set -> hash. It lives on the instance (one per graph) so that
-        # it is freed together with the graph, instead of in a process-wide
-        # lru_cache keyed by (self, indices) which would pin every graph forever.
+        self.adj=graph_adjacency(graph)
+        # Memo of node set -> hash. Owned by this per-graph helper (not a process-wide
+        # cache), so it dies with the graph and can be cleared per root.
         self.memo={}
 
     @staticmethod
@@ -160,10 +157,11 @@ class HashHelper():
         return hash_int
 
     def __call__(self, indices):
-        # very important, this is memoized (per graph, see __init__).
+        # very important, this is memoized.
         memo = self.memo
-        if indices in memo:
-            return memo[indices]
+        h = memo.get(indices)
+        if h is not None:
+            return h
 
         if len(indices)==1:
             # Just hash atom key
@@ -173,7 +171,7 @@ class HashHelper():
 
             memo[indices] = h
             return h
-        
+
         if len(indices)==2:
             # Include bond key in hash
             a1,a2=indices
@@ -183,26 +181,29 @@ class HashHelper():
             h = self.custom_hash(tuple(sorted((h1, h2, h3))))
             memo[indices] = h
             return h
-        
-        # hash abd count of all substructures of this structure that are at most one smaller than this one.
-        # Note that the his call passes itself back to generate_subgraphs to increase the efficiency
-        # of memoization.
-        sub_graph_set,_ = generate_subgraphs_depthwise(self.graph,len(indices)-1,hash_helper=self,whitelist=indices)
-        # generate_subgraphs_depthwise already paired every substructure with its (memoized) hash,
-        # so use those hashes directly instead of re-entering the cache for each one.
+
+        # hash and count of all connected proper substructures of this structure.
+        # The rooted enumeration restricted to `indices` with bound len-1 yields each
+        # connected proper subset exactly once, so the list is the exact multiset.
+        sub_hashes = []
+        allowed = set(indices)
+        for n in list(allowed): # changes during iteration
+            for sub in generate_subgraphs_from_node(self.graph,n,len(indices)-1,allowed,self.adj):
+                sub_hashes.append(self(sub))
+            allowed.remove(n)
         # combine hashes from substructures to form new hash for this: sort once and
         # run-length encode, same (hash, count) pairs as tuple(sorted(Counter(...).items())).
-        this_hashkey = sorted_hash_counts([h for sg, h in sub_graph_set])
+        this_hashkey = sorted_hash_counts(sub_hashes)
         h = self.custom_hash(this_hashkey)
 
         memo[indices] = h
         return h
 
-def compute_subgraphs_dfs(G, maxlen):
-        
+def compute_subgraphs_dfs(G, maxlen, memo_scope='graph'):
+
     if not isinstance(G, nx.classes.graph.Graph):
         raise ValueError('Unknown object for featurizing. Expected NetworkX graph, got {}'.format(type(G)))
-    subsets, counter = generate_subgraphs_depthwise(G, maxlen)
+    subsets, counter = generate_subgraphs_depthwise(G, maxlen, memo_scope=memo_scope)
 
     fingerprint: dict[int, int] = Counter()
     bitinfo: dict[int,list] = defaultdict(list)
