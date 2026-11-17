@@ -24,22 +24,15 @@ class BFSGraphletFeaturizer():
         self.verbose = False
 
         
-    def __call__(self, G): 
-        if self.return_nodewise:
-            fp, bi, node_fps, node_bi = generate_subgraphs_breadthwise(G=G, 
-                                                                       depth=self.size, 
-                                                                       full_hash=True,
-                                                                       node_key="atom_key",
-                                                                       edge_key="bond_key")
-            return fp, bi, node_fps, node_bi
-        else:
-            fp, bi = generate_subgraphs_breadthwise(G=G, 
-                                                    depth=self.size, 
-                                                    return_nodewise=False,
-                                                    full_hash=True,
-                                                    node_key="atom_key",
-                                                    edge_key="bond_key")    
-            return fp, bi
+    def __call__(self, G):
+        # Pass the flag through: the node-wise tables are only built when requested,
+        # so the result is (fp, bi, node_fps, node_bi) or (fp, bi) accordingly.
+        return generate_subgraphs_breadthwise(G=G,
+                                              depth=self.size,
+                                              return_nodewise=self.return_nodewise,
+                                              full_hash=True,
+                                              node_key="atom_key",
+                                              edge_key="bond_key")
     
 
 def custom_hash(obj):
@@ -267,34 +260,50 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
     for glet in current_graphlets:
         add_hash(glet)
 
-    # Transpose for fingerprint and bit_info
-    fingerprint: dict[int, int] = Counter()
-    bitinfo: dict[int,list] = defaultdict(list)
-    node_fingerprints: dict[int,dict[int,int]] = defaultdict(Counter)
-    node_bitinfos: dict[int,dict[int,list]] = defaultdict(lambda: defaultdict(list))
+    # Transpose for fingerprint and bit_info.
+    # Plain dicts filled with get-or-default: entries appear in the same first-seen order as
+    # with Counter/defaultdict, so the outputs are unchanged, but there is no factory call on
+    # every miss and no final cast back to dict.
+    fingerprint: dict[tuple, int] = {}
+    bitinfo: dict[tuple, list] = {}
+    # The node-wise tables are a projection of the two above (every graphlet is credited to
+    # each of its nodes), so they cost about len(glet) extra dict updates and list appends per
+    # graphlet. Only allocate and fill them when the caller asked for them.
+    node_fingerprints: dict[int, dict[tuple, int]] = {} if return_nodewise else None
+    node_bitinfos: dict[int, dict[tuple, list]] = {} if return_nodewise else None
 
-    # 1) Accumulating the information this wayseems hard to parallelize without directly locking 
+    # 1) Accumulating the information this wayseems hard to parallelize without directly locking
     # ea ch bucket inside fingerprint and bitinfo, but it could be done.
     # 2) There might be an efficient strategy for simply splitting (arbitrary) sets of graphlets
-    # to different threads and then merging fingerprint and bitinfo recursively from each threads? 
+    # to different threads and then merging fingerprint and bitinfo recursively from each threads?
     # 3) There might be a way to do the counting in the midst of a paralellizable sorting, merge-sort or similar.
     for glet, h in graphlet_hashes.items():
         size = len(glet)
         key = (size, h)
-        fingerprint[key] += 1
-        bitinfo[key].append(glet)
+        fingerprint[key] = fingerprint.get(key, 0) + 1
+        glets = bitinfo.get(key)
+        if glets is None:
+            bitinfo[key] = [glet]
+        else:
+            glets.append(glet)
         # This part might be more easily parallelized if we build the graph of descendants incrementally.
-        # If we did that, we could walk through the fingerprints for each node independently without 
-        # concern for thread safety. 
-        for node in glet:
-            node_fingerprints[node][key] +=1
-            node_bitinfos[node][key].append(glet)
-
-    # Cast to more conventional data structures, no actual changes.
-    fingerprint = dict(fingerprint)
-    bitinfo = dict(bitinfo)
-    node_fingerprints = {k:dict(v) for k,v in node_fingerprints.items()}
-    node_bitinfos = {k:dict(v) for k,v in node_bitinfos.items()}
+        # If we did that, we could walk through the fingerprints for each node independently without
+        # concern for thread safety.
+        if return_nodewise:
+            for node in glet:
+                nfp = node_fingerprints.get(node)
+                if nfp is None:
+                    # First graphlet containing this node (its size-1 graphlet).
+                    node_fingerprints[node] = {key: 1}
+                    node_bitinfos[node] = {key: [glet]}
+                    continue
+                nfp[key] = nfp.get(key, 0) + 1
+                nbi = node_bitinfos[node]
+                glets = nbi.get(key)
+                if glets is None:
+                    nbi[key] = [glet]
+                else:
+                    glets.append(glet)
 
     if return_nodewise:
         return fingerprint, bitinfo, node_fingerprints, node_bitinfos
