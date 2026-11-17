@@ -114,7 +114,7 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
 
         def link_glet(glet, next_glet):
             # Add backlinks for next graphlet to the current one.
-            parent_graph[next_glet].add(glet)
+            # Only ancestor_graph is read by the full hash, so parent_graph is not maintained here.
             ancestor_graph[next_glet].add(glet)
             ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
     else:
