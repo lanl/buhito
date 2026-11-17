@@ -8,6 +8,8 @@ import hashlib
 import networkx as nx
 from collections import Counter, defaultdict
 
+from buhito.utilities import sorted_hash_counts
+
 class BFSGraphletFeaturizer():     
     def __init__(self, max_len=3, return_nodewise=True):
         """A class to produce graphlets on graphs using breadth-first search.
@@ -22,27 +24,20 @@ class BFSGraphletFeaturizer():
         self.verbose = False
 
         
-    def __call__(self, G): 
-        if self.return_nodewise:
-            fp, bi, node_fps, node_bi = generate_subgraphs_breadthwise(G=G, 
-                                                                       depth=self.size, 
-                                                                       full_hash=True,
-                                                                       node_key="atom_key",
-                                                                       edge_key="bond_key")
-            return fp, bi, node_fps, node_bi
-        else:
-            fp, bi = generate_subgraphs_breadthwise(G=G, 
-                                                    depth=self.size, 
-                                                    return_nodewise=False,
-                                                    full_hash=True,
-                                                    node_key="atom_key",
-                                                    edge_key="bond_key")    
-            return fp, bi
+    def __call__(self, G):
+        # Pass the flag through: the node-wise tables are only built when requested,
+        # so the result is (fp, bi, node_fps, node_bi) or (fp, bi) accordingly.
+        return generate_subgraphs_breadthwise(G=G,
+                                              depth=self.size,
+                                              return_nodewise=self.return_nodewise,
+                                              full_hash=True,
+                                              node_key="atom_key",
+                                              edge_key="bond_key")
     
 
 def custom_hash(obj):
     s = str(obj).encode()
-    hash_int = int(hashlib.sha1(s).hexdigest(), 16)
+    hash_int = int.from_bytes(hashlib.sha1(s).digest(), 'big')
     return hash_int
 
 def graphlet_hash(glet: frozenset,
@@ -114,8 +109,9 @@ def graphlet_hash(glet: frozenset,
         # the parents' counters (instead of all ancestors) to compute the hash for this graphlet.
         # that strategy would also be a different assumption than the reconstruction hypothesis.
 
-        sub_hashes = Counter(current_hashes[a] for a in ancestors)
-        this_hashkey = tuple(sorted(sub_hashes.items()))
+        # Sort the ancestor hashes once and run-length encode them; same (hash, count)
+        # pairs as tuple(sorted(Counter(...).items())) without building a Counter.
+        this_hashkey = sorted_hash_counts(map(current_hashes.__getitem__, ancestors))
         h = hash_function(this_hashkey)
         return h
 
@@ -148,42 +144,61 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
     else:
         start_nodes = set(start_nodes) & whitelist  # Ensure start_nodes are in whitelist
 
-    current_graphlets: set[frozenset] = set(frozenset([n]) for n in G.nodes if n in whitelist)
+    hash_function = custom_hash
 
-    all_graphlets = set()
-    parent_graph: dict[frozenset, set[frozenset]] = defaultdict(set) # immediate backlinks between graphlets
-    ancestor_graph: dict[frozenset, set[frozenset]] = defaultdict(set) # all backlinks between graphlets
-    current_graphlets: dict[frozenset,set] = {} # dict of graphlet and frontier
-    graphlet_hashes: dict[frozenset,int] = {}
-    
-    if full_hash:
-        # Hashing based on all ancestors.
-        def add_hash(glet):
-            graphlet_hashes[glet] = graphlet_hash(glet, G, ancestor_graph, graphlet_hashes, node_key=node_key, edge_key=edge_key)
+    # Level-local integer layout: within one level a graphlet is identified by its
+    # position in a group of parallel lists (node set, frontier, parent ids, hash).
+    # Parent links are small-int indices into the previous level's lists, so adding a
+    # link is one list append and gathering parent hashes is an indexed read. The only
+    # keyed map is the per-level deduplication index, which is dropped once the level is
+    # complete (node sets of different sizes can never coincide, so a whole-run `seen`
+    # set is unnecessary). Only the previous and the current level stay resident; under
+    # full_hash a single write-once map node set -> hash keeps earlier hashes reachable.
+    # The enumeration set, the parent / ancestor multisets fed to each hash, the base
+    # cases and the label serialization are unchanged, so hash values are unchanged.
 
-        def link_glet(glet, next_glet):
-            # Add backlinks for next graphlet to the current one.
-            parent_graph[next_glet].add(glet)
-            ancestor_graph[next_glet].add(glet)
-            ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
-            # For size-2 graphlets, explicitly add single-node ancestors needed for hashing
-            if len(next_glet) == 2:
-                for node in next_glet:
-                    ancestor_graph[next_glet].add(frozenset({node}))
-    else:
-        # Only hash with the parent graph, not full ancestors.
-        def add_hash(glet):
-            graphlet_hashes[glet] = graphlet_hash(glet, G, parent_graph, graphlet_hashes, node_key=node_key, edge_key=edge_key)
+    # Outputs are accumulated per level as soon as the level is hashed.
+    # Plain dicts filled with get-or-default: entries appear in the same first-seen order as
+    # with Counter/defaultdict, so the outputs are unchanged and no final cast is needed.
+    fingerprint: dict[tuple, int] = {}
+    bitinfo: dict[tuple, list] = {}
+    # The node-wise tables are a projection of the two above (every graphlet is credited to
+    # each of its nodes). Only allocate and fill them when the caller asked for them.
+    node_fingerprints: dict[int, dict[tuple, int]] = {} if return_nodewise else None
+    node_bitinfos: dict[int, dict[tuple, list]] = {} if return_nodewise else None
 
-        def link_glet(glet, next_glet):
-            parent_graph[next_glet].add(glet)
-            # For size-2 graphlets with parent_graph, explicitly add single-node ancestors needed for hashing
-            if len(next_glet) == 2:
-                for node in next_glet:
-                    parent_graph[next_glet].add(frozenset({node}))
-    
+    def emit_level(size, level_nodes, level_hashes):
+        for glet, h in zip(level_nodes, level_hashes):
+            key = (size, h)
+            fingerprint[key] = fingerprint.get(key, 0) + 1
+            glets = bitinfo.get(key)
+            if glets is None:
+                bitinfo[key] = [glet]
+            else:
+                glets.append(glet)
+            if return_nodewise:
+                for node in glet:
+                    nfp = node_fingerprints.get(node)
+                    if nfp is None:
+                        # First graphlet containing this node.
+                        node_fingerprints[node] = {key: 1}
+                        node_bitinfos[node] = {key: [glet]}
+                        continue
+                    nfp[key] = nfp.get(key, 0) + 1
+                    nbi = node_bitinfos[node]
+                    glets = nbi.get(key)
+                    if glets is None:
+                        nbi[key] = [glet]
+                    else:
+                        glets.append(glet)
+
     # setup size 1 graphlets
-    # Initialize ALL size-1 graphlets
+    # Initialize ALL size-1 graphlets (in G.nodes order; the position is the id).
+    prev_nodes: list[frozenset] = []
+    prev_front: list[set] = []
+    prev_hash: list[int] = []
+    singleton: dict = {}      # node -> its size-1 graphlet object (reused as ancestor)
+    node_hash: dict = {}      # node -> hash of its size-1 graphlet (size-2 base case)
     for node in G.nodes:
         if node not in whitelist:
             continue
@@ -193,33 +208,43 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
                 continue
             frontier.add(neigh)
         glet = frozenset([node])
-        current_graphlets[glet] = frontier
-        all_graphlets.add(glet)
-    
+        # Just hash atom key
+        h = hash_function(G.nodes[node][node_key])
+        prev_nodes.append(glet)
+        prev_front.append(frontier)
+        prev_hash.append(h)
+        singleton[node] = glet
+        node_hash[node] = h
+    emit_level(1, prev_nodes, prev_hash)
+
+    if full_hash:
+        # Write-once map keeping every earlier hash reachable for the all-ancestors rule,
+        # plus the ancestor node sets of the previous level (positional).
+        hash_by_set: dict[frozenset,int] = dict(zip(prev_nodes, prev_hash))
+        prev_anc: list[set] = [set() for _ in prev_nodes]
+
     # If start_nodes is specified, we'll only expand from those nodes in the main loop
-    # For now, current_graphlets contains all size-1 graphlets with their frontiers
 
     # Now continue with larger graphlets. Not parallelizable.
     for size in range(2, depth+1): # stop when size is equal to depth.
 
-        next_graphlets: dict[frozenset,set] = {}
-        # Somewhat parallelizable but requires some locks.
-        for glet, frontier in current_graphlets.items():
-            # For each current graphlet
-            
-            # Since that parents/ancestors from previous rounds are complete, hash the graphlet.
-            add_hash(glet)
-            
+        index: dict[frozenset,int] = {}   # per-level dedup: node set -> position
+        nodes: list[frozenset] = []
+        front: list[set] = []
+        par: list[list[int]] = []         # positions in the previous level
+        # Frontiers are only needed to expand this level further.
+        need_frontier = size < depth
+
+        for i, glet in enumerate(prev_nodes):
+            # For each previous-level graphlet (parents/ancestors are complete and hashed).
+
             # For size-2, only expand from start_nodes if specified
-            skip_expansion = False
             if size == 2 and start_nodes is not None:
                 # Only expand from graphlets that contain a start_node
                 if not any(node in start_nodes for node in glet):
-                    skip_expansion = True
-            
-            if skip_expansion:
-                continue
-            
+                    continue
+
+            frontier = prev_front[i]
             # Construct successor graphlets
             for neigh in frontier:
                 # Make the next graphlet by adding a frontier element to the cluster
@@ -227,59 +252,69 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
                 next_glet.add(neigh)
                 next_glet = frozenset(next_glet)
 
-                if next_glet not in all_graphlets:
-                    # If this graphlet is new, set up the new frontier.
-                    next_frontier = frontier.copy()
-                    next_frontier.remove(neigh)
-                    for next_neigh in G.neighbors(neigh):
-                        if next_neigh in whitelist and next_neigh not in next_glet:
-                            next_frontier.add(next_neigh)
+                j = index.get(next_glet)
+                if j is None:
+                    # If this graphlet is new, set up the new frontier (not for the last level).
+                    if need_frontier:
+                        next_frontier = frontier.copy()
+                        next_frontier.remove(neigh)
+                        for next_neigh in G.neighbors(neigh):
+                            if next_neigh in whitelist and next_neigh not in next_glet:
+                                next_frontier.add(next_neigh)
+                        front.append(next_frontier)
 
-                    # Record this graphlet. 
-                    next_graphlets[next_glet] = next_frontier
-                    all_graphlets.add(next_glet)
-                
-                link_glet(glet, next_glet)
-                # # Add backlinks for next graphlet to the current one.
-                # parent_graph[next_glet].add(glet)
-                # ancestor_graph[next_glet].add(glet)
-                # ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
-                
-        # Set the current graphlets to the next round, and continue.
-        current_graphlets = next_graphlets
+                    # Record this graphlet and its first backlink.
+                    index[next_glet] = len(nodes)
+                    nodes.append(next_glet)
+                    par.append([i])
+                else:
+                    # Further backlink: one integer append.
+                    par[j].append(i)
+        del index
 
-    # Finally, hash the last set of graphlets
-    for glet in current_graphlets:
-        add_hash(glet)
+        if not nodes:
+            break
 
-    # Transpose for fingerprint and bit_info
-    fingerprint: dict[int, int] = Counter()
-    bitinfo: dict[int,list] = defaultdict(list)
-    node_fingerprints: dict[int,dict[int,int]] = defaultdict(Counter)
-    node_bitinfos: dict[int,dict[int,list]] = defaultdict(lambda: defaultdict(list))
+        # Hash the level: every backlink into it now exists.
+        hashes: list[int] = []
+        if size == 2:
+            # Include bond key in hash (same base case as graphlet_hash).
+            if full_hash:
+                anc: list[set] = []
+            for glet in nodes:
+                a1, a2 = sorted(glet)  # Sort for consistent ordering
+                h1 = node_hash[a1]
+                h2 = node_hash[a2]
+                btype = G.edges[a1,a2][edge_key]
+                h3 = hash_function(btype)
+                hashes.append(hash_function(tuple(sorted((h1, h2, h3)))))
+                if full_hash:
+                    # single-node ancestors needed for the all-ancestors rule
+                    anc.append({singleton[a1], singleton[a2]})
+        elif full_hash:
+            # Hashing based on all ancestors: distinct ancestor node sets of all parents.
+            anc = []
+            for parents in par:
+                ancestors = set()
+                for p in parents:
+                    ancestors.add(prev_nodes[p])
+                    ancestors |= prev_anc[p]
+                this_hashkey = sorted_hash_counts(map(hash_by_set.__getitem__, ancestors))
+                hashes.append(hash_function(this_hashkey))
+                anc.append(ancestors)
+        else:
+            # Only hash with the parent graph, not full ancestors.
+            for parents in par:
+                this_hashkey = sorted_hash_counts(map(prev_hash.__getitem__, parents))
+                hashes.append(hash_function(this_hashkey))
 
-    # 1) Accumulating the information this wayseems hard to parallelize without directly locking 
-    # ea ch bucket inside fingerprint and bitinfo, but it could be done.
-    # 2) There might be an efficient strategy for simply splitting (arbitrary) sets of graphlets
-    # to different threads and then merging fingerprint and bitinfo recursively from each threads? 
-    # 3) There might be a way to do the counting in the midst of a paralellizable sorting, merge-sort or similar.
-    for glet, h in graphlet_hashes.items():
-        size = len(glet)
-        key = (size, h)
-        fingerprint[key] += 1
-        bitinfo[key].append(glet)
-        # This part might be more easily parallelized if we build the graph of descendants incrementally.
-        # If we did that, we could walk through the fingerprints for each node independently without 
-        # concern for thread safety. 
-        for node in glet:
-            node_fingerprints[node][key] +=1
-            node_bitinfos[node][key].append(glet)
+        emit_level(size, nodes, hashes)
 
-    # Cast to more conventional data structures, no actual changes.
-    fingerprint = dict(fingerprint)
-    bitinfo = dict(bitinfo)
-    node_fingerprints = {k:dict(v) for k,v in node_fingerprints.items()}
-    node_bitinfos = {k:dict(v) for k,v in node_bitinfos.items()}
+        # Advance one level; the lists of level size-1 become garbage.
+        if full_hash:
+            hash_by_set.update(zip(nodes, hashes))
+            prev_anc = anc
+        prev_nodes, prev_front, prev_hash = nodes, front, hashes
 
     if return_nodewise:
         return fingerprint, bitinfo, node_fingerprints, node_bitinfos

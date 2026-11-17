@@ -10,7 +10,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from tqdm.auto import tqdm
 
-from buhito.utilities import uniquify_lol, evenly_distribute_jobs
+from buhito.utilities import uniquify_lol, evenly_distribute_jobs, effective_workers
 
 
 class GraphletTransformer(BaseEstimator, TransformerMixin):
@@ -30,8 +30,11 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             featurizer: a buhito.featurizers.Featurizer object
             return_dense (bool): whether transform returns a dense matrix
             return_float (bool):  whether transform returns a matrix of floats
-            n_jobs (int): number of joblib jobs
-            chunk_size (int or string): joblib chunk size. If "even", evaluates to n_mols // n_cores
+            n_jobs (int): number of joblib jobs (None or 1: no pool, run in this process;
+                          negative values follow the joblib convention, -1 = all cores)
+            chunk_size (int or string): number of graphs per parallel task. If "even", evaluates
+                                        to ceil(n_mols / (4 * n_workers)) so that the number of
+                                        tasks does not grow with the dataset
             verbose (int): verbosity level (currently 0 or 1)
 
         Attributes:
@@ -224,44 +227,65 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
                      * List of bit IDs
         """
 
-        # progress_bar = tqdm if self.verbose else lambda x: x
+        n_workers = effective_workers(self.n_jobs)
+        if len(gs) == 0:
+            return (), (), ()
 
-        if self.chunk_size == 'even':
-            real_n_jobs = self.n_jobs if self.n_jobs > 0 else cpu_count() + self.n_jobs + 1
-            batch_size = evenly_distribute_jobs(len(gs), real_n_jobs)
-        else: 
-            batch_size = self.chunk_size
-        p = Parallel(n_jobs=self.n_jobs, 
-                     verbose=self.verbose if self.verbose else 0,
-                     prefer='processes',
-                     batch_size=batch_size,
-                     return_as='generator',
-                     # backend='loky',
-                    )
-        if self.verbose:
-            print(f"Number of cores used: {effective_n_jobs(p.n_jobs)}")
-        f = delayed(self._get_fp) 
+        if n_workers == 1 or len(gs) <= 1:
+            # one worker: plain loop in this process, no pool at all
+            self._print("Number of cores used: 1")
+            fps = [self._get_fp(G, self.featurizer)
+                   for G in tqdm(gs, desc="Constructing Fingerprints", disable=not self.verbose)]
+        else:
+            # several workers: one task per contiguous chunk of graphs, so that the
+            # fixed per-task cost (dispatch, pickling the featurizer, resolving the
+            # result) is paid a constant number of times instead of once per graph
+            if self.chunk_size == 'even':
+                chunk_size = evenly_distribute_jobs(len(gs), n_workers)
+            else:
+                chunk_size = max(1, int(self.chunk_size))
+            chunks = [gs[i:i + chunk_size] for i in range(0, len(gs), chunk_size)]
+            p = Parallel(n_jobs=n_workers,
+                         verbose=self.verbose if self.verbose else 0,
+                         prefer='processes',
+                         batch_size=1,
+                         return_as='generator',
+                         # backend='loky',
+                        )
+            if self.verbose:
+                print(f"Number of cores used: {effective_n_jobs(p.n_jobs)}, "
+                      f"{len(chunks)} tasks of up to {chunk_size} graphs")
+            f = delayed(self._get_fps_chunk)
 
-        fps = tqdm(p(f(G,
-                  self.featurizer,
-                 )
-                for G in gs), desc="Constructing Fingerprints", total=len(gs), disable=not self.verbose)
-        (fps, 
-         bis, 
+            fps = []
+            with tqdm(desc="Constructing Fingerprints", total=len(gs), disable=not self.verbose) as bar:
+                # ordered generator: chunk results arrive in submission (= input) order
+                for part in p(f(chunk, self.featurizer) for chunk in chunks):
+                    fps.extend(part)
+                    bar.update(len(part))
+        (fps,
+         bis,
          bits,
         ) = list(zip(*fps))
-        return fps, bis, bits 
-    
+        return fps, bis, bits
+
     @staticmethod
     def _get_fp(G,
                 featurizer,
                ):
-        """Calls the featurizer on an individual graph, 
+        """Calls the featurizer on an individual graph,
         returning a fingerprint and a list of tuples of form (bit, r)
         """
         fp, bi = featurizer(G)
         bits = list(fp.keys())
         return fp, bi, bits
+
+    @staticmethod
+    def _get_fps_chunk(Gs,
+                       featurizer,
+                      ):
+        """Calls self._get_fp on every graph of a chunk (the body of one parallel task)"""
+        return [GraphletTransformer._get_fp(G, featurizer) for G in Gs]
     
     # def _to_sparse(self, fps, used_bits):
     #     """Convert a list of morgan fingerprints (represented as dicts) to a sparse matrix 

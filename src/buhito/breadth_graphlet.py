@@ -8,10 +8,12 @@ import hashlib
 import networkx as nx
 from collections import Counter, defaultdict
 
+from buhito.utilities import sorted_hash_counts
+
 
 def custom_hash(obj):
     s = str(obj).encode()
-    hash_int = int(hashlib.sha1(s).hexdigest(), 16)
+    hash_int = int.from_bytes(hashlib.sha1(s).digest(), 'big')
     return hash_int
 
 def graphlet_hash(glet: frozenset,
@@ -70,8 +72,9 @@ def graphlet_hash(glet: frozenset,
         # the parents' counters (instead of all ancestors) to compute the hash for this graphlet.
         # that strategy would also be a different assumption than the reconstruction hypothesis.
 
-        sub_hashes = Counter(current_hashes[a] for a in ancestors)
-        this_hashkey = tuple(sorted(sub_hashes.items()))
+        # Sort the ancestor hashes once and run-length encode them; same (hash, count)
+        # pairs as tuple(sorted(Counter(...).items())) without building a Counter.
+        this_hashkey = sorted_hash_counts(map(current_hashes.__getitem__, ancestors))
         h = hash_function(this_hashkey)
         return h
 
@@ -114,7 +117,7 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
 
         def link_glet(glet, next_glet):
             # Add backlinks for next graphlet to the current one.
-            parent_graph[next_glet].add(glet)
+            # Only ancestor_graph is read by the full hash, so parent_graph is not maintained here.
             ancestor_graph[next_glet].add(glet)
             ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
     else:
@@ -126,14 +129,17 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
             parent_graph[next_glet].add(glet)
     
     # setup size 1 graphlets
+    # A frontier is only ever read when a graphlet is expanded to the next size,
+    # so for depth == 1 the seeds get an empty placeholder instead.
     for node in G.nodes:
         if node not in whitelist:
             continue
         frontier = set()
-        for neigh in G.neighbors(node):
-            if neigh not in whitelist or neigh == node:
-                continue
-            frontier.add(neigh)
+        if depth > 1:
+            for neigh in G.neighbors(node):
+                if neigh not in whitelist or neigh == node:
+                    continue
+                frontier.add(neigh)
         glet = frozenset([node])
 
         current_graphlets[glet] = frontier
@@ -143,6 +149,10 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
     for size in range(2, depth+1): # stop when size is equal to depth.
 
         next_graphlets: dict[frozenset,set] = {}
+        # Graphlets of the final size are hashed but never expanded, so their
+        # frontiers are never read: skip building them (this is the largest
+        # level and carries the widest frontiers).
+        will_expand = size < depth
         # Somewhat parallelizable but requires some locks.
         for glet, frontier in current_graphlets.items():
             # For each current graphlet
@@ -157,14 +167,18 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
                 next_glet = frozenset(next_glet)
 
                 if next_glet not in all_graphlets:
-                    # If this graphlet is new, set up the new frontier.
-                    next_frontier = frontier.copy()
-                    next_frontier.remove(neigh)
-                    for next_neigh in G.neighbors(neigh):
-                        if next_neigh in whitelist and next_neigh not in next_glet:
-                            next_frontier.add(next_neigh)
+                    if will_expand:
+                        # If this graphlet is new, set up the new frontier.
+                        next_frontier = frontier.copy()
+                        next_frontier.remove(neigh)
+                        for next_neigh in G.neighbors(neigh):
+                            if next_neigh in whitelist and next_neigh not in next_glet:
+                                next_frontier.add(next_neigh)
+                    else:
+                        # Final size: placeholder, the frontier is never read.
+                        next_frontier = None
 
-                    # Record this graphlet. 
+                    # Record this graphlet.
                     next_graphlets[next_glet] = next_frontier
                     all_graphlets.add(next_glet)
                 
@@ -177,7 +191,7 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, return_nodewise=
         # Set the current graphlets to the next round, and continue.
         current_graphlets = next_graphlets
 
-    # Finally, hash the last set of graphlets
+    # Finally, hash the last set of graphlets (keys only; their frontiers were not built)
     for glet in current_graphlets:
         add_hash(glet)
 
