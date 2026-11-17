@@ -8,6 +8,8 @@ import re
 import networkx as nx
 from collections import Counter, defaultdict
 
+from buhito.utilities import sorted_hash_counts
+
 class DFSGraphletFeaturizer():     
     def __init__(self, max_len=3):
         """A class to produce graphlets on graphs using breadth-first search.
@@ -154,7 +156,7 @@ class HashHelper():
     @staticmethod
     def custom_hash(obj):
         s = str(obj).encode()
-        hash_int = int(hashlib.sha1(s).hexdigest(), 16)
+        hash_int = int.from_bytes(hashlib.sha1(s).digest(), 'big')
         return hash_int
 
     def __call__(self, indices):
@@ -186,10 +188,11 @@ class HashHelper():
         # Note that the his call passes itself back to generate_subgraphs to increase the efficiency
         # of memoization.
         sub_graph_set,_ = generate_subgraphs_depthwise(self.graph,len(indices)-1,hash_helper=self,whitelist=indices)
-        sub_graph_set = [sg for sg, h in sub_graph_set]
-        sub_hashes = Counter(self(idxs) for idxs in sub_graph_set)
-        # combine hashes from substructures to form new hash for this.
-        this_hashkey = tuple(sorted(sub_hashes.items()))
+        # generate_subgraphs_depthwise already paired every substructure with its (memoized) hash,
+        # so use those hashes directly instead of re-entering the cache for each one.
+        # combine hashes from substructures to form new hash for this: sort once and
+        # run-length encode, same (hash, count) pairs as tuple(sorted(Counter(...).items())).
+        this_hashkey = sorted_hash_counts([h for sg, h in sub_graph_set])
         h = self.custom_hash(this_hashkey)
 
         memo[indices] = h

@@ -8,6 +8,8 @@ import hashlib
 import networkx as nx
 from collections import Counter, defaultdict
 
+from buhito.utilities import sorted_hash_counts
+
 class BFSGraphletFeaturizer():     
     def __init__(self, max_len=3, return_nodewise=True):
         """A class to produce graphlets on graphs using breadth-first search.
@@ -42,7 +44,7 @@ class BFSGraphletFeaturizer():
 
 def custom_hash(obj):
     s = str(obj).encode()
-    hash_int = int(hashlib.sha1(s).hexdigest(), 16)
+    hash_int = int.from_bytes(hashlib.sha1(s).digest(), 'big')
     return hash_int
 
 def graphlet_hash(glet: frozenset,
@@ -114,8 +116,9 @@ def graphlet_hash(glet: frozenset,
         # the parents' counters (instead of all ancestors) to compute the hash for this graphlet.
         # that strategy would also be a different assumption than the reconstruction hypothesis.
 
-        sub_hashes = Counter(current_hashes[a] for a in ancestors)
-        this_hashkey = tuple(sorted(sub_hashes.items()))
+        # Sort the ancestor hashes once and run-length encode them; same (hash, count)
+        # pairs as tuple(sorted(Counter(...).items())) without building a Counter.
+        this_hashkey = sorted_hash_counts(map(current_hashes.__getitem__, ancestors))
         h = hash_function(this_hashkey)
         return h
 

@@ -35,3 +35,25 @@ def uniquify_lol(list_of_lists):
     return sorted(list(u))
 
 
+def sorted_hash_counts(hashes):
+    """Canonical multiset of hashes as a tuple of (hash, count) pairs in ascending hash order.
+
+    Equivalent to ``tuple(sorted(Counter(hashes).items()))`` but avoids constructing a
+    Counter: the hashes are sorted once and adjacent equal values are run-length encoded.
+    """
+    pairs = []
+    prev = None
+    n = 0
+    for h in sorted(hashes):
+        if h == prev:
+            n += 1
+        else:
+            if n:
+                pairs.append((prev, n))
+            prev = h
+            n = 1
+    if n:
+        pairs.append((prev, n))
+    return tuple(pairs)
+
+
