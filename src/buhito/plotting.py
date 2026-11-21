@@ -1,16 +1,14 @@
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import networkx as nx
 
 
-def to_pydot_custom(G, node_label_attr="atom_key", edge_label_attr="bond_key", show_edge_labels=False, 
+def to_pydot_custom(G, node_label_attr="node_label", edge_label_attr="edge_label", show_edge_labels=False,
                     rankdir="LR"): # LR, TB, BT, RL):
     # prog = dot, neato, fdp, sfdp, etc. (for plotting)
     P = nx.nx_pydot.to_pydot(G)
     P.set_rankdir(rankdir)
-    P.set_node_defaults(shape="circle")  
-    P.set_edge_defaults() 
+    P.set_node_defaults(shape="circle")
+    P.set_edge_defaults()
 
     for n in G.nodes:
         pd_node = P.get_node(str(n))
@@ -37,11 +35,11 @@ def to_pydot_custom(G, node_label_attr="atom_key", edge_label_attr="bond_key", s
 
     return P
 
-def get_graphs_with_graphlet(bit, 
-                             bit_ids, 
-                             X): 
+def get_graphs_with_graphlet(bit,
+                             bit_ids,
+                             X):
     """
-    Outputs the indices of the graphs with at least one instance of graphlet identified by its hash 
+    Outputs the indices of the graphs with at least one instance of graphlet identified by its hash
     """
     i = bit_ids.index(bit)
     ii, jj = X.nonzero()
@@ -50,19 +48,19 @@ def get_graphs_with_graphlet(bit,
 
 def draw_graphlet(bit=None, gr=None, node_ixs=None, gr_idx=0,
                   featurizer=None, X=None, train_df=None,
-                  node_label_attr="atom_symbol", edge_label_attr="bond_key"):
+                  node_label_attr="node_label", edge_label_attr="edge_label"):
     """
     Draw a graphlet as a pydot graph.
 
     a) node_ixs and gr define an induced subgraph, the function draws it
-    b) if only bit is provided, find a molecule containing the bit using get_graphs_with_graphlet function, 
+    b) if only bit is provided, find a graph containing the bit using get_graphs_with_graphlet function,
     extract the node indices, build the induced subgraph and return a pydot graph.
 
     Parameters:
     - bit: a bit identifier (tuple (num of nodes, hash)) or an integer index in bit_ids_
     - gr: a NetworkX graph
     - node_ixs: iterable of node indices to keep
-    - gr_idx: index selecting which molecule to use (default 0).
+    - gr_idx: index selecting which graph to use (default 0).
     - featurizer, X, train_df: objects after featurization.
     """
     if node_ixs is not None:

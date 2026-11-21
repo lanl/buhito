@@ -1,0 +1,7 @@
+Graphlet Enumeration Benchmark Report
+========================================
+
+Graphs: 0
+Max sizes: [3, 4]
+Repeats: 3, Warmup: 1
+

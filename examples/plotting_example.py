@@ -19,7 +19,7 @@ import shutil
 import networkx as nx
 from PIL import Image
 
-from buhito.featurizers.bfs_graphlet_featurizer import BFSGraphletFeaturizer 
+from buhito.featurizers.bfs_graphlet_featurizer import BFSGraphletFeaturizer
 from buhito.featurizers.dfs_graphlet_featurizer import DFSGraphletFeaturizer
 import buhito.plotting as bhp
 
@@ -30,10 +30,10 @@ def main(out_dir="graphlets_out", max_size=5, per_row=6, remove_folder_after=Fal
 
     G = nx.petersen_graph()
 
-    labels = {n: f"C" for n in G.nodes}
-    nx.set_node_attributes(G, labels, "atom_key")
+    labels = {n: "node" for n in G.nodes}
+    nx.set_node_attributes(G, labels, "node_label")
     labels_e = {n: f"1" for n in G.edges}
-    nx.set_edge_attributes(G, labels_e, "bond_key")
+    nx.set_edge_attributes(G, labels_e, "edge_label")
 
     bfs = BFSGraphletFeaturizer(return_nodewise=False, max_len=max_size)
     dfs = DFSGraphletFeaturizer(max_len=max_size)
@@ -49,7 +49,7 @@ def main(out_dir="graphlets_out", max_size=5, per_row=6, remove_folder_after=Fal
     for i, bit in enumerate(bits):
         try:
             node_inds = b1[bit][0]
-            P = bhp.draw_graphlet(gr=G, node_ixs=node_inds, node_label_attr="atom_key")
+            P = bhp.draw_graphlet(gr=G, node_ixs=node_inds, node_label_attr="node_label")
         except Exception:
             continue
 

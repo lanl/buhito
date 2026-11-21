@@ -9,3 +9,5 @@ build/*
 **/*.ipynb_checkpoints/*
 **/__pycache__/*
 dist
+bench_qm9
+logs/

@@ -3,7 +3,7 @@ from time import time
 import numpy as np
 import scipy as sp
 
-from joblib import Parallel, delayed, effective_n_jobs, cpu_count
+from joblib import Parallel, delayed, effective_n_jobs
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
@@ -11,27 +11,28 @@ from sklearn.utils.validation import check_is_fitted
 from tqdm.auto import tqdm
 
 from buhito.utilities import uniquify_lol, evenly_distribute_jobs
+from buhito.sparse_eliminator import map_useless_features_sparse
 
 
 class GraphletTransformer(BaseEstimator, TransformerMixin):
-    
-    def __init__(self, 
-                 featurizer, 
+
+    def __init__(self,
+                 featurizer,
                  return_dense=False,
                  return_float=False,
                  n_jobs=None,
                  chunk_size='even',
                  verbose=0,
-                ): 
-        
-        """sklearn transformer that applies buhito featurizers to networkx graphs.  
+                ):
+
+        """sklearn transformer that applies buhito featurizers to networkx graphs.
 
         Args:
             featurizer: a buhito.featurizers.Featurizer object
             return_dense (bool): whether transform returns a dense matrix
             return_float (bool):  whether transform returns a matrix of floats
             n_jobs (int): number of joblib jobs
-            chunk_size (int or string): joblib chunk size. If "even", evaluates to n_mols // n_cores
+            chunk_size (int or string): joblib chunk size. If "even", evaluates to n_graphs // n_cores
             verbose (int): verbosity level (currently 0 or 1)
 
         Attributes:
@@ -43,8 +44,8 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             self.X_unseen_ (np.ndarray or sp.sparse.matrix): matrix of fingerprint fragments found during transform
             self.bit_indices_unseen_ (dict): maps unseen bit IDs to their column index
             self.bit_sizes_unseen_ (list): list of sizes of fragments found during transform.
-            self.bi_fit_ (list): list of bit maps (map bit IDs to to lists of atoms) found during fit
-            self.bi_transform_ (list): list of bit maps (map bit IDs to to lists of atoms) found during transform
+            self.bi_fit_ (list): list of bit maps (map bit IDs to to lists of nodes) found during fit
+            self.bi_transform_ (list): list of bit maps (map bit IDs to to lists of nodes) found during transform
             self.transform_time_ (float): time per graph taken during transform in seconds
         """
         self.featurizer = featurizer
@@ -83,22 +84,22 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             self (FingerprintFeaturizer): this instance
         """
 
-        if self.verbose: 
+        if self.verbose:
             print(f'Finding fingerprints in fit')
         X = self._as_list(X)
         fps, self.bi_fit_, bit_ids = self._get_fps(X)
-            
+
         # unnest, get unique BitIDs, and sort bit IDs
-        
+
         self.bit_ids_ = sorted(uniquify_lol(bit_ids))
         (self.bit_indices_,
          self.bit_sizes_) = self._get_bit_indices_and_sizes(self.bit_ids_)
         self.n_bits_ = len(self.bit_ids_)
-        
+
         if self.verbose:
             print(f'N bits: {self.n_bits_}')
-            
-        # the cache is used in between fit and transform 
+
+        # the cache is used in between fit and transform
         # during self.fit_transform to avoid computing the FPs twice
         if self._in_fit_transform:
             self._cache['fps'] = fps
@@ -160,8 +161,8 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             if self.X_unseen_ is not None:
                 self.X_unseen_ = self.X_unseen_.astype(float)
 
-        self.transform_time_ = (time() - start) / len(X)  # .shape[0]
-        self._print(f"Sparse Transform time: {round(self.transform_time_, 3)} s/mol")
+        self.transform_time_ = (time() - start) / max(1, len(X))  # .shape[0]
+        self._print(f"Sparse Transform time: {round(self.transform_time_, 3)} s/graph")
 
         if return_unseen:
             return M_seen, self.X_unseen_
@@ -188,16 +189,31 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
         self._in_fit_transform = False
         self._cache = {}
         return out
-    
+
+    def extract_smaller_fp(self, fps, new_max_subgraph_size=3, return_bit_ids_updated=False):
+        if self.featurizer.size < new_max_subgraph_size:
+            print("Selected max substructure size is bigger than in available fingerprinter.\n "
+                  "Please, invoke new fingerprinting procedure.")
+            return
+
+        inds_of_smaller_size = np.flatnonzero(self.bit_sizes_ <= new_max_subgraph_size)
+        new_fps = fps.tocsc()[:, inds_of_smaller_size].tocsr()
+        if return_bit_ids_updated:
+            updated_bits_ids = [self.bit_ids_[i] for i in inds_of_smaller_size]
+            return new_fps, updated_bits_ids
+        else:
+            return new_fps
+
+
     def get_feature_names_out(self):
         check_is_fitted(self, "is_fitted_")
         return np.array([str(b) for b in self.bit_ids_], dtype=object)
-    
+
     @staticmethod
     def _get_bit_indices_and_sizes(bit_ids):
             """Given a list of bit ids
-            
-            return 
+
+            return
                 * dict mapping list elements to indexes (for constant time arg lookup)
                 * np array  of size elements of the IDs
             """
@@ -209,29 +225,29 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             bit_indices = {v: i for i, v in enumerate(bit_ids)}
 
             # a list of bit sizes
-            bit_sizes, _ = map(np.asarray, zip(*bit_ids))
-            
+            bit_sizes = np.asarray([bit[0] for bit in bit_ids], dtype=int)
+
             return bit_indices, bit_sizes
-    
+
     def _get_fps(self, gs):
         """Applies self._get_fp in parallel over graphs
-        :param gs: iterable of graphs   
+        :param gs: iterable of graphs
         :return: Tuple[List[Dict], List[Dict], List[List[Tuple]]]
-        
-                 The elemenets of these tuple are: 
-                     * List of fingerprints 
-                     * List of bit maps (map bit IDs to to lists of atoms) 
+
+                 The elemenets of these tuple are:
+                     * List of fingerprints
+                     * List of bit maps (map bit IDs to to lists of nodes)
                      * List of bit IDs
         """
 
         # progress_bar = tqdm if self.verbose else lambda x: x
 
         if self.chunk_size == 'even':
-            real_n_jobs = self.n_jobs if self.n_jobs > 0 else cpu_count() + self.n_jobs + 1
+            real_n_jobs = effective_n_jobs(self.n_jobs)
             batch_size = evenly_distribute_jobs(len(gs), real_n_jobs)
-        else: 
+        else:
             batch_size = self.chunk_size
-        p = Parallel(n_jobs=self.n_jobs, 
+        p = Parallel(n_jobs=self.n_jobs,
                      verbose=self.verbose if self.verbose else 0,
                      prefer='processes',
                      batch_size=batch_size,
@@ -240,53 +256,33 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
                     )
         if self.verbose:
             print(f"Number of cores used: {effective_n_jobs(p.n_jobs)}")
-        f = delayed(self._get_fp) 
+        f = delayed(self._get_fp)
 
         fps = tqdm(p(f(G,
                   self.featurizer,
                  )
                 for G in gs), desc="Constructing Fingerprints", total=len(gs), disable=not self.verbose)
-        (fps, 
-         bis, 
-         bits,
-        ) = list(zip(*fps))
-        return fps, bis, bits 
-    
+        results = list(fps)
+        if not results:
+            return (), (), ()
+        fps, bis, bits = zip(*results)
+        return fps, bis, bits
+
     @staticmethod
     def _get_fp(G,
                 featurizer,
                ):
-        """Calls the featurizer on an individual graph, 
+        """Calls the featurizer on an individual graph,
         returning a fingerprint and a list of tuples of form (bit, r)
         """
         fp, bi = featurizer(G)
         bits = list(fp.keys())
         return fp, bi, bits
-    
-    # def _to_sparse(self, fps, used_bits):
-    #     """Convert a list of morgan fingerprints (represented as dicts) to a sparse matrix 
-    #     of shape (len(fps), self.n_bits)
-    #     :param fps: List[Dict] 
-    #     :param used_bits: the unique bits present in fps
-    #     """
-        
-    #     M = sp.sparse.dok_matrix((len(fps), len(used_bits)), dtype=int)
-    #     for i, fp in tqdm(enumerate(fps), 
-    #                       'Converting FPs to sparse', 
-    #                       total=len(fps),
-    #                       disable=not self.verbose): 
-    #         for bit, count in fp.items(): 
-    #             if bit in used_bits:
-    #                 j = used_bits[bit]
-    #                 M[(i, j)] = count
-                    
-    #     return M
-    
-    # a new _to_sparse
+
     def _to_sparse(self, fps, used_bits): #COO instead of DOK
         rows, cols, data = [], [], []
-        for i, fp in tqdm(enumerate(fps), 
-                          'Converting FPs to sparse', 
+        for i, fp in tqdm(enumerate(fps),
+                          'Converting FPs to sparse',
                           total=len(fps),
                           disable=not self.verbose):
             for bit, count in fp.items():
@@ -299,8 +295,29 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
     @staticmethod
     def _as_list(X):
         return X if isinstance(X, list) else list(X)
-    
-    def _print(self, msg): 
-        if self.verbose: 
+
+    def _print(self, msg):
+        if self.verbose:
             print(msg)
 
+
+
+class SparseFeatureEliminator(BaseEstimator, TransformerMixin):
+
+    def __init__(self, overflow_action='warn', verbose=False):
+        self.overflow_action = overflow_action
+        self.verbose = verbose
+
+    def fit(self, X, y=None):
+        if self.verbose:
+            print('sparse feature elim')
+        self.useful_, self.mapr_ = map_useless_features_sparse(
+                                        X,
+                                        overflow_action=self.overflow_action
+                                    )
+        self.n_useful_ = self.useful_.sum()
+        self.frac_useful_ = self.useful_.mean()
+        return self
+
+    def transform(self, X):
+        return X[:, self.useful_]

@@ -3,10 +3,8 @@ Depth-first calculation of graphlet histogram with recursive hash.
 """
 from functools import lru_cache
 import hashlib
-import re
 
 
-import networkx as nx
 from collections import Counter, defaultdict
 
 # version with nice notation.
@@ -66,21 +64,24 @@ def search_subgraphs_from_cluster(G, depth, neighbors, yields_with, whitelist, f
         yields_with.remove(n) # remove from current set for yielding
 
     return
-    
 
-def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None):
+
+def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None, *,
+                                node_key="node_label", edge_key="edge_label"):
     """
-    G: networkx graph for molecule
+    G: NetworkX graph
     maxlen: size of
     hash_helper: used to compute hashes when this function is called recursively
-    whitelist: subset of atoms in the molecule to consider.
+    whitelist: subset of nodes to consider.
     """
     # If hash_helper is None, we are generating fresh.
     # if hash_helper is not None, we are helping ourselves.
 
+    if maxlen < 1:
+        raise ValueError("maxlen must be at least 1")
     retain_counts=(hash_helper is None)
     if retain_counts:
-        hash_helper=HashHelper(G,maxlen)
+        hash_helper=HashHelper(G, maxlen, node_key=node_key, edge_key=edge_key)
 
     all_subsets = set()
     if whitelist is None:
@@ -94,8 +95,8 @@ def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None):
             h = hash_helper(subset)
             if (subset,h) in all_subsets:
                 print(f"Subset {subset} with hash {h} is in all subsets already!")
-            all_subsets.add((subset,h))         
-            
+            all_subsets.add((subset,h))
+
         whitelist.remove(n) # now never look at that node again
     if retain_counts:
         res = Counter((len(ss),h) for ss,h in all_subsets)
@@ -104,9 +105,11 @@ def generate_subgraphs_depthwise(G, maxlen, hash_helper=None, whitelist=None):
     return all_subsets,res
 
 class HashHelper():
-    def __init__(self, graph, maxlen):
+    def __init__(self, graph, maxlen, *, node_key="node_label", edge_key="edge_label"):
         self.graph=graph
         self.maxlen=maxlen
+        self.node_key = node_key
+        self.edge_key = edge_key
 
     @staticmethod
     def custom_hash(obj):
@@ -118,22 +121,22 @@ class HashHelper():
     def __call__(self, indices):
 
         if len(indices)==1:
-            # Just hash atom key
+            # Hash the node label
             a=list(indices)[0]
-            akey = self.graph.nodes[a]['atom_key']
+            akey = self.graph.nodes[a].get(self.node_key, 1) if self.node_key is not None else 1
             h = self.custom_hash(akey)
 
             return h
-        
+
         if len(indices)==2:
-            # Include bond key in hash
+            # Include the edge label in the hash
             a1,a2=indices
             h1, h2 = map(self,((a1,),(a2,)))
-            btype = self.graph.edges[a1,a2]['bond_key']
+            btype = self.graph.edges[a1,a2].get(self.edge_key, 1) if self.edge_key is not None else 1
             h3 = self.custom_hash(btype)
             h = self.custom_hash(tuple(sorted((h1, h2, h3))))
             return h
-        
+
         # hash abd count of all substructures of this structure that are at most one smaller than this one.
         # Note that the his call passes itself back to generate_subgraphs to increase the efficiency
         # of memoization.
@@ -145,5 +148,3 @@ class HashHelper():
         h = self.custom_hash(this_hashkey)
 
         return h
-                                 
-

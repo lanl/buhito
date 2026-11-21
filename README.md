@@ -1,7 +1,7 @@
 # buhito
 <img src="https://raw.githubusercontent.com/lanl/buhito/main/assets/buhito_icon.svg" alt="Logo" width="500">
 
-**buhito** is a Python library for enumerating graphlets and analyzing graphlet-based features from graphs. 
+**buhito** is a Python library for enumerating graphlets and analyzing graphlet-based features from graphs.
 
 ## Installation
 ```bash
@@ -20,16 +20,16 @@ from buhito import generate_subgraphs_breadthwise
 
 G = nx.petersen_graph()
 
-nx.set_node_attributes(G, {n: "C" for n in G.nodes}, "atom_key")
-nx.set_edge_attributes(G, {e: "1" for e in G.edges}, "bond_key")
+nx.set_node_attributes(G, {n: "node" for n in G.nodes}, "node_label")
+nx.set_edge_attributes(G, {e: "1" for e in G.edges}, "edge_label")
 
 fp, bitinfo = generate_subgraphs_breadthwise(
     G,
     depth=4,
     return_nodewise=False,
     full_hash=True,
-    node_key="atom_key",
-    edge_key="bond_key"
+    node_key="node_label",
+    edge_key="edge_label"
 )
 
 print("Graphlet fingerprint length:", len(fp))
@@ -49,18 +49,21 @@ print("Found graphlet subsets:", len(subsets))
 Available example scripts:
 
 - `examples/plotting_example.py` — visualize graphlets from the Petersen graph
-- `examples/qm9/benchmark_graphlet_featurizers_train_test.py` — benchmark featurizers on QM9 chemical properties data
+- [Reddit graph classification and enumeration benchmark](examples/reddit_example/README.rst)
 
-## Run Examples
-### QM9
+From the repository root:
+
 ```sh
-python examples/qm9/benchmark_graphlet_featurizers_train_test.py \
-  --data examples/qm9/qm9data/qm9_processed.csv \
-  --max-len 2 3 4 5 6 \
-  --repeats 3 \
-  --n-jobs -1 \
-  --outdir bench_qm9
+uv run python examples/reddit_example/reddit_graphlets_example.py --data-root path/to/data_root
+uv run python examples/reddit_example/reddit_individual_graphs_benchmark.py path/to/graph_pickles
 ```
+
+Buhito provides general graph algorithms and has no MinervaChem or RDKit dependency.
+Chemical conversion and the QM9 benchmark live in MinervaChem, which depends on
+Buhito. The SMILES converter is now `minervachem.converters.smiles_to_nx`.
+
+See [package boundaries and migration notes](ARCHITECTURE.md) and
+[local/HPC demo runners](scripts/README.md).
 
 ## Testing
 
@@ -71,7 +74,6 @@ pytest tests/
 ## Package structure
 
 - `src/buhito/` — core features
-- `src/buhito/converters.py` — converters to NetworkX graphs
 - `src/buhito/plotting.py` — graphlet visualization helpers
 
 ## Authors
@@ -103,5 +105,3 @@ Security Administration. The Government is granted for itself and others acting 
 nonexclusive, paid-up, irrevocable worldwide license in this material to reproduce, prepare.
 derivative works, distribute copies to the public, perform publicly and display publicly, and to permit.
 others to do so.
-
-
