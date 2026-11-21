@@ -1,4 +1,4 @@
-"""Run repository demos locally or submit independent Slurm jobs.
+"""Submit independent Slurm jobs for repository demos.
 
 This module uses only the standard library. Notebook execution writes outputs
 back to the source notebook after successful execution.
@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 
@@ -54,6 +53,7 @@ def main(argv=None):
     select.add_argument('--all', action='store_true', help='Run every demo; default inputs must exist')
     select.add_argument('--list', action='store_true')
     parser.add_argument('--slurm', action='store_true', help='Submit one Slurm job per demo')
+    parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--cpus', type=int, default=None)
     parser.add_argument('--mem', default=None)
     parser.add_argument('--time', default=os.environ.get('HPC_TIME', '08:00:00'))
@@ -62,6 +62,8 @@ def main(argv=None):
     parser.add_argument('--mail-user', default=os.environ.get('MAIL_USER'))
     parser.add_argument('demo_args', nargs=argparse.REMAINDER, help='Arguments following -- are forwarded to the Python demo')
     opts = parser.parse_args(argv)
+    if opts.worker and (not os.environ.get('SLURM_JOB_ID') or not opts.demo or opts.slurm):
+        parser.error('--worker requires a Slurm allocation and exactly one --demo')
     project = opts.project.resolve()
     demos = discover_demos(project, opts.demo_root)
     if opts.list:
@@ -85,23 +87,21 @@ def main(argv=None):
     # Validate all selections before executing or submitting any jobs.
     commands = [(path, execution_command(path, args)) for path in demos]
     try:
-        resources = {path: notebook_resources(path) or ('1', '8G') for path in demos} if opts.slurm else {}
+        resources = {path: notebook_resources(path) or ('1', '8G') for path in demos} if not opts.worker else {}
     except ValueError as error:
         parser.error(str(error))
     failures = []
     for path, command in commands:
         relative = path.relative_to(project)
-        if opts.slurm:
+        if not opts.worker:
             cores, memory = resources[path]
             cores = str(opts.cpus or cores)
             memory = opts.mem or memory
             logs = project / 'logs'
             logs.mkdir(exist_ok=True)
             name = str(relative.with_suffix('')).replace('/', '__')
-            # Reuse this environment on the compute node without resynchronizing
-            # a shared virtualenv in every concurrent job.
-            worker = [sys.executable, '-m', 'buhito.demo_runner', '--project', str(project),
-                      '--demo-root', opts.demo_root, '--demo', str(relative), '--', *args]
+            worker = [str(project / 'scripts/demo_job.sh'), str(project),
+                      opts.demo_root, '--demo', str(relative), '--', *args]
             submit = ['sbatch', '--parsable', '--chdir', str(project), '--job-name', name,
                       '--cpus-per-task', cores, '--mem', memory, '--time', opts.time,
                       '--output', str(logs / (name + '-%j.out')),
@@ -112,7 +112,7 @@ def main(argv=None):
                     submit += ['--' + flag, value]
             if opts.mail_user:
                 submit += ['--mail-type', 'BEGIN,END,FAIL']
-            submit += ['--wrap', shlex.join(worker)]
+            submit += worker
             result = subprocess.run(submit, check=True, capture_output=True, text=True)
             print(f'Submitted {relative}: {result.stdout.strip()}', flush=True)
         else:

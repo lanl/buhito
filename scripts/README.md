@@ -1,24 +1,28 @@
 # Demo runners
 
-Run commands from the Buhito repository root. `uv` prepares the environment with
-the `demos` and `ml` extras. HPC compute nodes must see the same checkout and
+Run commands from the Buhito repository root. The frontend uses only Python 3
+standard-library discovery and Slurm submission. Inside each job, `uv` prepares
+the environment with the `demos` and `ml` extras. HPC compute nodes must see the same checkout and
 virtual environment. Graph rendering requires the system Graphviz `dot` program.
 
 ```sh
 ./scripts/run_demo.sh --list
-./scripts/run_all_demos.sh --slurm
-./scripts/run_demo.sh --demo examples/padre/padre_example.ipynb --slurm
-./scripts/run_demo.sh --demo examples/plotting_example.py --slurm
-./scripts/run_demo.sh --demo examples/reddit_example/reddit_graphlets_example.py --slurm -- --data-root /absolute/path/to/data
-./scripts/run_demo.sh --demo examples/reddit_example/reddit_individual_graphs_benchmark.py --slurm -- /absolute/path/to/graph_pickles
+./scripts/run_all_demos.sh
+./scripts/run_demo.sh --demo examples/padre/padre_example.ipynb
+./scripts/run_demo.sh --demo examples/plotting_example.py
+./scripts/run_demo.sh --demo examples/reddit_example/reddit_graphlets_example.py -- --data-root /absolute/path/to/data
+./scripts/run_demo.sh --demo examples/reddit_example/reddit_individual_graphs_benchmark.py -- /absolute/path/to/graph_pickles
 ```
 
-`--slurm` submits one independent job per selected demo. Omit it to execute locally.
+The shell launchers submit one independent Slurm job per selected demo by default.
+`--slurm` remains accepted for compatibility. They require `sbatch`; submission
+failure never falls back to local execution. Python demos and notebooks both
+run through `demo_job.sh` on compute nodes. The worker refuses to execute without
+a Slurm allocation; environment preparation happens inside the job.
 `run_all_demos.sh` discovers every `.py` and `.ipynb` recursively in `examples/`,
 excluding checkpoints, hidden directories, and old executed copies. All-demo runs
 use the demos' default inputs, which must already exist; use `--demo ... -- ...`
-for dataset paths and other arguments. Failed local demos are reported with a
-nonzero exit status after the remaining demos have run. A failed Slurm submission
+for dataset paths and other arguments. A failed Slurm submission
 stops submission and reports the failure; jobs already submitted remain queued.
 
 Notebook execution replaces outputs in the original `.ipynb` on success, using
@@ -44,3 +48,9 @@ with one native library thread per worker to prevent oversubscription. The scrip
 The synthetic PADRE notebook requests **4 CPUs and 8G RAM** for its small
 synthetic dataset and parallel random forests. Resource requests are configured
 budgets, not measured peak requirements; use `--cpus`/`--mem` to tune an actual run.
+
+The batch worker follows the original notebook runner: one node and task,
+`standard` QoS, account `w26_pfas_g`, no GPUs, and no requeue. Use `--account`
+or `HPC_ACCOUNT` to override the account. Runtime and cache directories use
+`SLURM_TMPDIR` (or `/tmp`) inside each job. The frontend requires Python 3 and
+`sbatch`; it does not run `uv`, import demo packages, or execute demo code.

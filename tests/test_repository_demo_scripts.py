@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,9 @@ def setup_project(tmp_path, name):
     folder = 'examples' if name == 'buhito' else 'demos'
     project = tmp_path / name
     shutil.copytree(source / 'scripts', project / 'scripts')
+    runner = tmp_path / 'buhito/src/buhito/demo_runner.py'
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(BUHITO / 'src/buhito/demo_runner.py', runner)
     expected = {}
     for notebook in (source / folder).rglob('*.ipynb'):
         if any(part.startswith('.') for part in notebook.relative_to(source).parts):
@@ -73,8 +75,7 @@ def assert_submissions(record, expected, legacy=False):
             cores = next(arg.split('=', 1)[1] for arg in command if arg.startswith('--cpus-per-task='))
             memory = next(arg.split('=', 1)[1] for arg in command if arg.startswith('--mem='))
         else:
-            worker = shlex.split(command[command.index('--wrap') + 1])
-            relative = worker[worker.index('--demo') + 1]
+            relative = command[command.index('--demo') + 1]
             cores = command[command.index('--cpus-per-task') + 1]
             memory = command[command.index('--mem') + 1]
         assert relative not in actual, f'Duplicate job for {relative}'
@@ -83,13 +84,88 @@ def assert_submissions(record, expected, legacy=False):
 
 
 @pytest.mark.parametrize('name', ['buhito', 'minervachem'])
-def test_all_notebooks_via_repository_all_demo_script(tmp_path, name):
+@pytest.mark.parametrize('flags', [[], ['--slurm']])
+def test_all_notebooks_via_repository_all_demo_script(tmp_path, name, flags):
     project, expected, record, env = setup_project(tmp_path, name)
     assert expected
-    result = subprocess.run(['bash', str(project / 'scripts/run_all_demos.sh'), '--slurm'],
+    folder = 'examples' if name == 'buhito' else 'demos'
+    script = project / folder / 'must_only_run_on_compute_node.py'
+    sentinel = project / 'demo-executed'
+    script.write_text(f'from pathlib import Path\nPath({str(sentinel)!r}).touch()\n')
+    expected[str(script.relative_to(project))] = ('1', '8G')
+    result = subprocess.run(['bash', str(project / 'scripts/run_all_demos.sh'), *flags],
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not sentinel.exists()
+    assert_submissions(record, expected)
+
+
+@pytest.mark.parametrize('name', ['buhito', 'minervachem'])
+def test_frontend_does_not_prepare_environment_or_import_demo_packages(tmp_path, name):
+    project, expected, record, env = setup_project(tmp_path, name)
+    (tmp_path / 'bin/uv').write_text('#!/usr/bin/env bash\necho "uv must only run inside a job" >&2\nexit 99\n')
+    (tmp_path / 'buhito/src/buhito/__init__.py').write_text('raise AssertionError("frontend imported demo packages")\n')
+    result = subprocess.run(['bash', str(project / 'scripts/run_all_demos.sh')],
                             env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert_submissions(record, expected)
+
+
+@pytest.mark.parametrize('name', ['buhito', 'minervachem'])
+def test_single_demo_submits_by_default(tmp_path, name):
+    project, expected, record, env = setup_project(tmp_path, name)
+    relative = next(iter(expected))
+    result = subprocess.run(['bash', str(project / 'scripts/run_demo.sh'), '--demo', relative],
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert_submissions(record, {relative: expected[relative]})
+
+
+@pytest.mark.parametrize('name', ['buhito', 'minervachem'])
+def test_failed_submission_never_executes_demo(tmp_path, name):
+    project, _, record, env = setup_project(tmp_path, name)
+    folder = 'examples' if name == 'buhito' else 'demos'
+    script = project / folder / 'must_only_run_on_compute_node.py'
+    sentinel = project / 'demo-executed'
+    script.write_text(f'from pathlib import Path\nPath({str(sentinel)!r}).touch()\n')
+    (tmp_path / 'bin/sbatch').write_text('#!/usr/bin/env bash\nexit 42\n')
+    result = subprocess.run(['bash', str(project / 'scripts/run_all_demos.sh')],
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert not record.exists()
+    assert not sentinel.exists()
+
+
+@pytest.mark.parametrize('name', ['buhito', 'minervachem'])
+def test_python_demo_executes_only_in_batch_worker(tmp_path, name):
+    project, _, record, env = setup_project(tmp_path, name)
+    folder = 'examples' if name == 'buhito' else 'demos'
+    script = project / folder / 'python_demo.py'
+    sentinel = project / 'worker-result.json'
+    script.write_text('import json, os, sys\nfrom pathlib import Path\n'
+                      f'Path({str(sentinel)!r}).write_text(json.dumps({{'
+                      '"job": os.environ["SLURM_JOB_ID"], "args": sys.argv[1:], '
+                      '"cpus": os.environ["LOKY_MAX_CPU_COUNT"], '
+                      '"runtime": os.environ["JUPYTER_RUNTIME_DIR"]}))\n')
+    result = subprocess.run(['bash', str(project / 'scripts/run_demo.sh'), '--demo',
+                             str(script.relative_to(project)), '--', '--data', 'input with spaces.csv'],
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not sentinel.exists()
+    command = json.loads(record.read_text())
+    worker_index = command.index(str(project / 'scripts/demo_job.sh'))
+    worker = ['bash', *command[worker_index:]]
+    rejected = subprocess.run(worker, env=env, capture_output=True, text=True, timeout=30)
+    assert rejected.returncode != 0
+    assert not sentinel.exists()
+    env.update(SLURM_JOB_ID='123', SLURM_CPUS_PER_TASK='4', SLURM_TMPDIR=str(tmp_path / 'scratch'))
+    result = subprocess.run(worker, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    outcome = json.loads(sentinel.read_text())
+    assert outcome['job'] == '123'
+    assert outcome['args'] == ['--data', 'input with spaces.csv']
+    assert outcome['cpus'] == '4'
+    assert Path(outcome['runtime']).is_relative_to(tmp_path / 'scratch')
 
 
 def test_legacy_all_notebooks_uses_each_notebooks_resources(tmp_path):
