@@ -59,3 +59,39 @@ The batch worker follows the original notebook runner: one node and task,
 or `HPC_ACCOUNT` to override the account. Runtime and cache directories use
 `SLURM_TMPDIR` (or `/tmp`) inside each job. The frontend requires `uv` and `sbatch`. It runs the submission script through
 `uv run` using the project Python, without importing or executing demo code.
+
+## Rerun only the Reddit individual-graph benchmark
+
+```sh
+./scripts/run_reddit_benchmark.sh
+# Override the Slurm request if needed:
+./scripts/run_reddit_benchmark.sh --mem 256G --time 08:00:00
+# Submit a reduced smoke job using the complete graphs through size 3:
+./scripts/run_reddit_benchmark.sh -- --smoke
+```
+
+This wrapper submits exactly one job. The benchmark's own resource marker requests
+**1 CPU and 256G RAM**, including when selected by `run_all_demos.sh`. Enumeration
+is sequential, so additional CPUs do not reduce the per-process memory demand.
+The normal run still uses both graphs, sizes 3 and 4, three repeats and one warmup.
+`--smoke` uses size 3, one repeat and no warmup. Graphs are loaded in filename order,
+and only the selected graph files are unpickled.
+
+A bounded **local** memory check is also available; unlike the Slurm launchers,
+it deliberately runs short child processes locally, with a 12 GiB address-space
+cap and 180-second timeout per case:
+
+```sh
+uv run python scripts/hpc/smoke_reddit_benchmark.py
+```
+
+It measures the first full graph through size 3, two induced hub-neighborhood
+samples through size 4, and the second full graph through size 4. Results and
+size-4 extrapolations are written to `logs/reddit_memory_smoke.json`. Extrapolation
+uses measured incremental RSS per enumerated graphlet and a connected-size-4
+candidate upper bound; it is not a measured full-size peak or a memory guarantee.
+
+BFS never creates terminal expansion frontiers, skips nodewise outputs when they
+are not requested, and releases enumeration links after hashing. Benchmark calls
+release graphlet locations and the DFS hash cache between warmups/repetitions.
+Returned hashes and locations are preserved.

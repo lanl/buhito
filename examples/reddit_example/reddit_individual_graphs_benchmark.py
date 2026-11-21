@@ -1,3 +1,4 @@
+# HPC_RESOURCES: cpus=1 mem=256G
 import numpy as np
 import networkx as nx
 import buhito as bh
@@ -8,7 +9,9 @@ import pickle
 
 import os
 import time
-import sys
+import argparse
+import gc
+from buhito.depth_graphlet import HashHelper
 from pathlib import Path
 import statistics as stats
 from dataclasses import dataclass, asdict
@@ -40,36 +43,40 @@ class BenchRow:
     total_graphlets: int
 
 def time_call(fn, *args, repeats: int = 5, warmup: int = 1) -> Tuple[List[float], Any]:
+    """Time each call once and retain only its small count histogram.
+
+    Release graphlet locations and the DFS hash cache between repetitions so
+    memory use does not grow with warmup/repeat count. Cleanup is not timed.
     """
-    Times fn(*args) multiple times.
-    Returns (times, last_result).
-    """
-    # warmup first
-    last = None
+    if repeats < 1 or warmup < 0:
+        raise ValueError("repeats must be positive and warmup nonnegative")
+
+    def invoke():
+        start = time.perf_counter()
+        result = fn(*args)
+        elapsed = time.perf_counter() - start
+        counts = dict(result[1] if len(result) == 2 else result[0])
+        del result
+        cache_clear = getattr(HashHelper.__call__, 'cache_clear', None)
+        if cache_clear is not None:
+            cache_clear()
+        gc.collect()
+        return elapsed, counts
+
     for _ in range(warmup):
-        try:
-            _, last = fn(*args)
-            runopt = 1
-        except:
-            last, _, _, _ = fn(*args)
-            runopt = 2
-
+        invoke()
     times = []
+    last = None
     for _ in range(repeats):
-        if runopt == 1:
-            t0 = time.perf_counter()
-            _, last = fn(*args)
-            t1 = time.perf_counter()
-        elif runopt == 2:
-            t0 = time.perf_counter()
-            last, _, _, _ = fn(*args)
-            t1 = time.perf_counter()
-        else:
-            print("Error: runopt not set correctly.")
-            break
-        times.append(t1 - t0)
-
+        elapsed, last = invoke()
+        times.append(elapsed)
     return times, last
+
+
+def bfs_histogram(G, size):
+    counts, locations = bh.generate_subgraphs_breadthwise(G, size, return_nodewise=False)
+    return locations, counts
+
 
 def run_benchmark(
     graphs: List[Tuple[str, nx.Graph]],
@@ -85,7 +92,7 @@ def run_benchmark(
     rows: List[BenchRow] = []
 
     algos = [
-        ("bfs", bh.generate_subgraphs_breadthwise),
+        ("bfs", bfs_histogram),
         ("dfs", bh.generate_subgraphs_depthwise),
     ]
 
@@ -211,8 +218,8 @@ def run_benchmark(
 
     return df
 
-def load_individual_benchmark_graphs(bm_dir) -> Dict[int, nx.Graph]:
-    bm_locs = glob.glob(os.path.join(bm_dir, "*.pkl"))
+def load_individual_benchmark_graphs(bm_dir, limit=None) -> Dict[int, nx.Graph]:
+    bm_locs = sorted(glob.glob(os.path.join(bm_dir, "*.pkl")))
     if not bm_locs:
         raise FileNotFoundError(
             f"No .pkl graph files found in '{os.path.abspath(bm_dir)}'. "
@@ -220,7 +227,9 @@ def load_individual_benchmark_graphs(bm_dir) -> Dict[int, nx.Graph]:
             "as the first command-line argument."
         )
 
-    # load all graphs
+    if limit is not None:
+        bm_locs = bm_locs[:limit]
+
     individual_graphs = {}
     for i, loc in enumerate(bm_locs):
         with open(loc, "rb") as f:
@@ -245,19 +254,29 @@ def make_dated_out_dir(out_dir: str, prefix: str | None = None) -> str:
             return candidate
         i += 1
 
-if __name__ == "__main__":
-    bm_dir = str(Path(__file__).resolve().parent / "reddit_graphs_benchmarks")
-    bm_dir = str(sys.argv[1]) if len(sys.argv) > 1 else bm_dir
-    individual_graphs = load_individual_benchmark_graphs(bm_dir)
-
-    graphs = [(f"reddit_graph_{i}", G) for i, G in individual_graphs.items()][:2]  # limit to first 2 graphs for testing
-    out_dir = make_dated_out_dir(os.path.dirname(bm_dir), prefix="reddit_benchmark_out")
-
-    max_sizes = [3, 4]
-    df = run_benchmark(
-        graphs=graphs,
-        max_sizes=max_sizes,
-        repeats=3,
-        warmup=1,
-        out_dir=out_dir,
+def main():
+    parser = argparse.ArgumentParser(description="Benchmark BFS/DFS graphlet enumeration on Reddit graphs")
+    parser.add_argument('graph_dir', nargs='?', type=Path,
+                        default=Path(__file__).resolve().parent / 'reddit_graphs_benchmarks')
+    parser.add_argument('--max-sizes', nargs='+', type=int, default=[3, 4])
+    parser.add_argument('--max-graphs', type=int, default=2)
+    parser.add_argument('--repeats', type=int, default=3)
+    parser.add_argument('--warmup', type=int, default=1)
+    parser.add_argument('--out-dir', type=Path)
+    parser.add_argument('--smoke', action='store_true', help='Full selected graphs through size 3, one repeat, no warmup')
+    args = parser.parse_args()
+    if args.max_graphs < 1 or any(size < 1 for size in args.max_sizes) or args.repeats < 1 or args.warmup < 0:
+        parser.error('Graph counts, sizes, and repeats must be positive; warmup must be nonnegative')
+    graphs = load_individual_benchmark_graphs(args.graph_dir, limit=args.max_graphs)
+    out_dir = args.out_dir or make_dated_out_dir(str(args.graph_dir.parent), prefix="reddit_benchmark_out")
+    run_benchmark(
+        [(f'reddit_graph_{i}', graph) for i, graph in graphs.items()],
+        max_sizes=[3] if args.smoke else args.max_sizes,
+        repeats=1 if args.smoke else args.repeats,
+        warmup=0 if args.smoke else args.warmup,
+        out_dir=str(out_dir),
     )
+
+
+if __name__ == '__main__':
+    main()

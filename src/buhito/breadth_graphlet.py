@@ -111,9 +111,6 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
     else:
         start_nodes = set(start_nodes) & whitelist  # Ensure start_nodes are in whitelist
 
-    current_graphlets: set[frozenset] = set(frozenset([n]) for n in G.nodes if n in whitelist)
-
-    all_graphlets = set()
     parent_graph: dict[frozenset, set[frozenset]] = defaultdict(set) # immediate backlinks between graphlets
     ancestor_graph: dict[frozenset, set[frozenset]] = defaultdict(set) # all backlinks between graphlets
     current_graphlets: dict[frozenset,set] = {} # dict of graphlet and frontier
@@ -126,7 +123,6 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
 
         def link_glet(glet, next_glet):
             # Add backlinks for next graphlet to the current one.
-            parent_graph[next_glet].add(glet)
             ancestor_graph[next_glet].add(glet)
             ancestor_graph[next_glet] |= ancestor_graph[glet] # Add ancestors of this parent.
             # For size-2 graphlets, explicitly add single-node ancestors needed for hashing
@@ -150,14 +146,12 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
     for node in G.nodes:
         if node not in whitelist:
             continue
-        frontier = set()
-        for neigh in G.neighbors(node):
-            if neigh not in whitelist or neigh == node:
-                continue
-            frontier.add(neigh)
+        frontier = None
+        if depth > 1:
+            frontier = {neigh for neigh in G.neighbors(node)
+                        if neigh in whitelist and neigh != node}
         glet = frozenset([node])
         current_graphlets[glet] = frontier
-        all_graphlets.add(glet)
 
     # If start_nodes is specified, we'll only expand from those nodes in the main loop
     # For now, current_graphlets contains all size-1 graphlets with their frontiers
@@ -190,17 +184,19 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
                 next_glet.add(neigh)
                 next_glet = frozenset(next_glet)
 
-                if next_glet not in all_graphlets:
+                if next_glet not in next_graphlets:
                     # If this graphlet is new, set up the new frontier.
-                    next_frontier = frontier.copy()
-                    next_frontier.remove(neigh)
-                    for next_neigh in G.neighbors(neigh):
-                        if next_neigh in whitelist and next_neigh not in next_glet:
-                            next_frontier.add(next_neigh)
-
+                    next_frontier = None
+                    # Terminal graphlets are hashed but never expanded. Their
+                    # frontiers can be huge around hubs and are not needed.
+                    if size < depth:
+                        next_frontier = frontier.copy()
+                        next_frontier.remove(neigh)
+                        for next_neigh in G.neighbors(neigh):
+                            if next_neigh in whitelist and next_neigh not in next_glet:
+                                next_frontier.add(next_neigh)
                     # Record this graphlet.
                     next_graphlets[next_glet] = next_frontier
-                    all_graphlets.add(next_glet)
 
                 link_glet(glet, next_glet)
                 # # Add backlinks for next graphlet to the current one.
@@ -214,6 +210,13 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
     # Finally, hash the last set of graphlets
     for glet in current_graphlets:
         add_hash(glet)
+
+    # All final hashes and locations are now retained in graphlet_hashes.
+    # Enumeration frontiers and inclusion links are not part of the output.
+    current_graphlets.clear()
+    parent_graph.clear()
+    ancestor_graph.clear()
+    del add_hash, link_glet
 
     # Transpose for fingerprint and bit_info
     fingerprint: dict[int, int] = Counter()
@@ -234,9 +237,10 @@ def generate_subgraphs_breadthwise(G, depth, *, whitelist=None, start_nodes=None
         # This part might be more easily parallelized if we build the graph of descendants incrementally.
         # If we did that, we could walk through the fingerprints for each node independently without
         # concern for thread safety.
-        for node in glet:
-            node_fingerprints[node][key] +=1
-            node_bitinfos[node][key].append(glet)
+        if return_nodewise:
+            for node in glet:
+                node_fingerprints[node][key] +=1
+                node_bitinfos[node][key].append(glet)
 
     # Cast to more conventional data structures, no actual changes.
     fingerprint = dict(fingerprint)
