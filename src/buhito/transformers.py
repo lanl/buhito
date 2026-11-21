@@ -23,6 +23,7 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
                  n_jobs=None,
                  chunk_size='even',
                  verbose=0,
+                 retain_bit_info=True,
                 ):
 
         """sklearn transformer that applies buhito featurizers to networkx graphs.
@@ -34,6 +35,8 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             n_jobs (int): number of joblib jobs
             chunk_size (int or string): joblib chunk size. If "even", evaluates to n_graphs // n_cores
             verbose (int): verbosity level (currently 0 or 1)
+            retain_bit_info (bool): retain graphlet locations for interpretation;
+                disable for count-only ML to reduce memory.
 
         Attributes:
             self.n_bits_ (int): number of fingerprint fragments found during fit. Sorted like self.bit_ids_
@@ -49,6 +52,7 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
             self.transform_time_ (float): time per graph taken during transform in seconds
         """
         self.featurizer = featurizer
+        self.retain_bit_info = retain_bit_info
         self.return_dense = return_dense
         self.return_float = return_float
         self.n_jobs = n_jobs
@@ -252,6 +256,7 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
                      prefer='processes',
                      batch_size=batch_size,
                      return_as='generator',
+                     pre_dispatch='n_jobs',
                      # backend='loky',
                     )
         if self.verbose:
@@ -260,6 +265,7 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
 
         fps = tqdm(p(f(G,
                   self.featurizer,
+                  self.retain_bit_info,
                  )
                 for G in gs), desc="Constructing Fingerprints", total=len(gs), disable=not self.verbose)
         results = list(fps)
@@ -271,11 +277,17 @@ class GraphletTransformer(BaseEstimator, TransformerMixin):
     @staticmethod
     def _get_fp(G,
                 featurizer,
+                retain_bit_info=True,
                ):
         """Calls the featurizer on an individual graph,
         returning a fingerprint and a list of tuples of form (bit, r)
         """
-        fp, bi = featurizer(G)
+        if not retain_bit_info and hasattr(featurizer, 'counts_only'):
+            fp, bi = featurizer.counts_only(G), None
+        else:
+            fp, bi = featurizer(G)
+            if not retain_bit_info:
+                bi = None
         bits = list(fp.keys())
         return fp, bi, bits
 

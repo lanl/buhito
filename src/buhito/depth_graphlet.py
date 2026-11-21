@@ -1,8 +1,8 @@
 """
 Depth-first calculation of graphlet histogram with recursive hash.
 """
-from functools import lru_cache
 import hashlib
+from itertools import combinations
 
 
 from collections import Counter, defaultdict
@@ -110,6 +110,7 @@ class HashHelper():
         self.maxlen=maxlen
         self.node_key = node_key
         self.edge_key = edge_key
+        self._cache = {}
 
     @staticmethod
     def custom_hash(obj):
@@ -117,8 +118,13 @@ class HashHelper():
         hash_int = int(hashlib.sha1(s).hexdigest(), 16)
         return hash_int
 
-    @lru_cache(maxsize=None) # very important, this is memoized.
     def __call__(self, indices):
+        # A graph-local cache must not retain all previously processed graphs.
+        if indices not in self._cache:
+            self._cache[indices] = self._hash(indices)
+        return self._cache[indices]
+
+    def _hash(self, indices):
 
         if len(indices)==1:
             # Hash the node label
@@ -136,6 +142,15 @@ class HashHelper():
             h3 = self.custom_hash(btype)
             h = self.custom_hash(tuple(sorted((h1, h2, h3))))
             return h
+
+        if len(indices) == 3:
+            # The proper connected subgraphs of a connected triple are exactly
+            # its three nodes and its edges. Avoid recursive enumeration here.
+            sub_hashes = Counter(self((node,)) for node in indices)
+            for first, second in combinations(indices, 2):
+                if self.graph.has_edge(first, second):
+                    sub_hashes[self(frozenset((first, second)))] += 1
+            return self.custom_hash(tuple(sorted(sub_hashes.items())))
 
         # hash abd count of all substructures of this structure that are at most one smaller than this one.
         # Note that the his call passes itself back to generate_subgraphs to increase the efficiency

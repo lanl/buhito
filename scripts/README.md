@@ -50,9 +50,14 @@ The synthetic PADRE notebook requests **4 CPUs and 8G RAM** for its small
 synthetic dataset and parallel random forests. Resource requests are configured
 budgets, not measured peak requirements; use `--cpus`/`--mem` to tune an actual run.
 
-The full Reddit graphlets example requests **64 CPUs and 64G RAM** in both
-single-demo and all-demo submissions. Its parallel featurization uses the Slurm
-CPU allocation. The time limit remains 8 hours by default.
+The full Reddit graphlets classification example requests **4 CPUs and 128G RAM**
+in both single-demo and all-demo submissions. Its default worker count is at most
+four, even if more CPUs are allocated. The time limit remains 8 hours by default.
+Classification uses streaming count-only DFS features, one graph per task, and
+sparse matrices throughout. Graphlet locations are not retained for this demo.
+The hash cache is local to each graph and is released when processing finishes.
+The graph loader reads edges in chunks without duplicating the entire edge list;
+processed graph objects are released after their features are built.
 
 The batch worker follows the original notebook runner: one node and task,
 `standard` QoS, account `w26_pfas_g`, no GPUs, and no requeue. Use `--account`
@@ -95,3 +100,34 @@ BFS never creates terminal expansion frontiers, skips nodewise outputs when they
 are not requested, and releases enumeration links after hashing. Benchmark calls
 release graphlet locations and the DFS hash cache between warmups/repetitions.
 Returned hashes and locations are preserved.
+
+## Rerun only the Reddit classification demo (second-to-last job)
+
+```sh
+./scripts/run_reddit_classification.sh
+# Submit a short class-balanced subset job:
+./scripts/run_reddit_classification.sh -- --smoke
+# Optional explicit allocation and worker count:
+./scripts/run_reddit_classification.sh --cpus 2 --mem 128G -- --n-jobs 2
+```
+
+This submits only `examples/reddit_example/reddit_graphlets_example.py`.
+The normal job still processes every graph with size-3 graphlets. `--smoke`
+selects ten complete graphs per class and caps the solver at 100 iterations;
+`--graph-ids` selects explicit one-based graph IDs when needed.
+
+To run the bounded local memory smoke, including five complete graphs per class
+plus the two graphs with the highest estimated size-3 workload:
+
+```sh
+uv run python scripts/hpc/smoke_reddit_classification.py
+```
+
+It monitors aggregate RSS of the four-worker process tree, enforces an 8 GiB
+local RSS cap and a five-minute timeout, and writes a report and output log to
+`logs/reddit_classification_smoke.json` and `.log`. This checks the classification
+pipeline on stress inputs; it does not measure the full dataset's peak memory.
+
+General-purpose `GraphletTransformer` callers still retain graphlet locations by
+default. Set `retain_bit_info=False` for count-only workflows that do not need
+interpretation; supporting featurizers can stream via `counts_only`.
