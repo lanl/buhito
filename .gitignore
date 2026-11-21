@@ -11,3 +11,9 @@ build/*
 dist
 bench_qm9
 logs/
+
+# Downloaded or locally prepared input datasets
+/data/
+/REDDIT-MULTI-5K/
+/REDDIT-MULTI-5K.zip
+/examples/reddit_example/reddit_graphs_benchmarks/
