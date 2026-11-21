@@ -101,13 +101,17 @@ def test_all_notebooks_via_repository_all_demo_script(tmp_path, name, flags):
 
 
 @pytest.mark.parametrize('name', ['buhito', 'minervachem'])
-def test_frontend_does_not_prepare_environment_or_import_demo_packages(tmp_path, name):
+def test_frontend_uses_uv_to_submit_without_importing_demo_packages(tmp_path, name):
     project, expected, record, env = setup_project(tmp_path, name)
-    (tmp_path / 'bin/uv').write_text('#!/usr/bin/env bash\necho "uv must only run inside a job" >&2\nexit 99\n')
+    uv = tmp_path / 'bin/uv'
+    uv.write_text(uv.read_text().replace('set -euo pipefail\n', 'set -euo pipefail\ntouch "$DEMO_TEST_UV_CALLED"\n'))
+    marker = tmp_path / 'uv-called'
+    env['DEMO_TEST_UV_CALLED'] = str(marker)
     (tmp_path / 'buhito/src/buhito/__init__.py').write_text('raise AssertionError("frontend imported demo packages")\n')
     result = subprocess.run(['bash', str(project / 'scripts/run_all_demos.sh')],
                             env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert marker.exists()
     assert_submissions(record, expected)
 
 

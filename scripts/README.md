@@ -1,8 +1,7 @@
 # Demo runners
 
-Run commands from the Buhito repository root. The frontend uses only Python 3
-standard-library discovery and Slurm submission. Inside each job, `uv` prepares
-the environment with the `demos` and `ml` extras. HPC compute nodes must see the same checkout and
+Run commands from the Buhito repository root. The launchers use `uv run` with
+the `demos` and `ml` extras for the submission script and the batch worker. HPC compute nodes must see the same checkout and
 virtual environment. Graph rendering requires the system Graphviz `dot` program.
 
 ```sh
@@ -18,7 +17,8 @@ The shell launchers submit one independent Slurm job per selected demo by defaul
 `--slurm` remains accepted for compatibility. They require `sbatch`; submission
 failure never falls back to local execution. Python demos and notebooks both
 run through `demo_job.sh` on compute nodes. The worker refuses to execute without
-a Slurm allocation; environment preparation happens inside the job.
+a Slurm allocation. The frontend runs the submission script through `uv run`;
+only the batch worker executes demo code.
 `run_all_demos.sh` discovers every `.py` and `.ipynb` recursively in `examples/`,
 excluding checkpoints, hidden directories, and old executed copies. All-demo runs
 use the demos' default inputs, which must already exist; use `--demo ... -- ...`
@@ -52,5 +52,5 @@ budgets, not measured peak requirements; use `--cpus`/`--mem` to tune an actual 
 The batch worker follows the original notebook runner: one node and task,
 `standard` QoS, account `w26_pfas_g`, no GPUs, and no requeue. Use `--account`
 or `HPC_ACCOUNT` to override the account. Runtime and cache directories use
-`SLURM_TMPDIR` (or `/tmp`) inside each job. The frontend requires Python 3 and
-`sbatch`; it does not run `uv`, import demo packages, or execute demo code.
+`SLURM_TMPDIR` (or `/tmp`) inside each job. The frontend requires `uv` and `sbatch`. It runs the submission script through
+`uv run` using the project Python, without importing or executing demo code.

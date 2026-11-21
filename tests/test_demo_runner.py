@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 
-from buhito import demo_runner
+from buhito import demo_runner, demo_worker
 
 
 def test_all_demos_submit_independently_and_notebooks_run_inplace(tmp_path, monkeypatch):
@@ -19,7 +19,7 @@ def test_all_demos_submit_independently_and_notebooks_run_inplace(tmp_path, monk
     (root / 'old_executed.ipynb').write_text('{}')
     (root / 'old.executed.ipynb').write_text('{}')
     assert set(demo_runner.discover_demos(tmp_path, 'examples')) == {root / 'one.py', notebook}
-    command = demo_runner.execution_command(notebook, [])
+    command = demo_worker.execution_command(notebook, [])
     assert '--inplace' in command
     assert not any('output-dir' in value or 'executed' in value for value in command)
     submitted = []
@@ -44,8 +44,8 @@ def test_forward_script_arguments(tmp_path, monkeypatch):
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
         return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(demo_runner.subprocess, 'run', fake_run)
-    demo_runner.main(['--project', str(tmp_path), '--demo-root', 'demos', '--worker', '--demo', 'demos/one.py', '--', '--data', 'input.csv'])
+    monkeypatch.setattr(demo_worker.subprocess, 'run', fake_run)
+    demo_worker.main(['--project', str(tmp_path), '--demo-root', 'demos', '--demo', 'demos/one.py', '--', '--data', 'input.csv'])
     assert calls[0][0][-2:] == ['--data', 'input.csv']
     assert calls[0][1]['cwd'] == tmp_path
 
@@ -73,8 +73,8 @@ def test_worker_caps_joblib_to_slurm_allocation(tmp_path, monkeypatch):
     def fake_run(command, **kwargs):
         captured.append(kwargs['env'])
         return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(demo_runner.subprocess, 'run', fake_run)
-    demo_runner.main(['--project', str(tmp_path), '--demo-root', 'examples', '--worker', '--demo', 'examples/one.py'])
+    monkeypatch.setattr(demo_worker.subprocess, 'run', fake_run)
+    demo_worker.main(['--project', str(tmp_path), '--demo-root', 'examples', '--demo', 'examples/one.py'])
     assert captured[0]['LOKY_MAX_CPU_COUNT'] == '4'
     assert captured[0]['OMP_NUM_THREADS'] == '1'
 
@@ -83,5 +83,13 @@ def test_worker_refuses_frontend_execution(tmp_path, monkeypatch):
     import pytest
     monkeypatch.delenv('SLURM_JOB_ID', raising=False)
     with pytest.raises(SystemExit, match='2'):
+        demo_worker.main(['--project', str(tmp_path), '--demo-root', 'examples',
+                          '--demo', 'examples/one.py'])
+
+
+def test_submitter_has_no_execution_mode_even_inside_allocation(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setenv('SLURM_JOB_ID', '123')
+    with pytest.raises(SystemExit, match='2'):
         demo_runner.main(['--project', str(tmp_path), '--demo-root', 'examples',
-                          '--worker', '--demo', 'examples/one.py'])
+                          '--demo', 'examples/one.py', '--worker'])
