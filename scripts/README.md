@@ -50,7 +50,7 @@ The synthetic PADRE notebook requests **4 CPUs and 8G RAM** for its small
 synthetic dataset and parallel random forests. Resource requests are configured
 budgets, not measured peak requirements; use `--cpus`/`--mem` to tune an actual run.
 
-The full Reddit graphlets example requests **32 CPUs and 64G RAM** in both
+The full Reddit graphlets example requests **64 CPUs and 64G RAM** in both
 single-demo and all-demo submissions. Its parallel featurization uses the Slurm
 CPU allocation. The time limit remains 8 hours by default.
 

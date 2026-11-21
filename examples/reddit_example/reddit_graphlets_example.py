@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# HPC_RESOURCES: cpus=32 mem=64G
+# HPC_RESOURCES: cpus=64 mem=64G
 
 import argparse
 import os

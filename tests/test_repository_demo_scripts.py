@@ -126,8 +126,8 @@ def test_single_demo_submits_by_default(tmp_path, name):
 
 
 @pytest.mark.parametrize('all_demos,overrides,resources', [
-    (True, [], ('32', '64G')),
-    (False, [], ('32', '64G')),
+    (True, [], ('64', '64G')),
+    (False, [], ('64', '64G')),
     (False, ['--cpus', '16', '--mem', '32G'], ('16', '32G')),
 ])
 def test_reddit_demo_requests_parallel_resources(tmp_path, all_demos, overrides, resources):
