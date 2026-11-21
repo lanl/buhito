@@ -30,7 +30,9 @@ def notebook_resources(path):
     markdown = next((''.join(cell.get('source', [])) for cell in notebook.get('cells', [])
                      if cell.get('cell_type') == 'markdown'), '')
     match = re.search(r'<!--\s*HPC_RESOURCES:\s*cpus=([1-9]\d*)\s+mem=([1-9]\d*[KMGTP])\s*-->', markdown)
-    return (match[1], match[2]) if match else None
+    if match is None:
+        raise ValueError(f'{path}: missing or invalid HPC_RESOURCES marker in the first Markdown cell')
+    return match[1], match[2]
 
 
 def execution_command(path, args):
@@ -82,11 +84,15 @@ def main(argv=None):
         parser.error('--mem must be a positive size such as 8G')
     # Validate all selections before executing or submitting any jobs.
     commands = [(path, execution_command(path, args)) for path in demos]
+    try:
+        resources = {path: notebook_resources(path) or ('1', '8G') for path in demos} if opts.slurm else {}
+    except ValueError as error:
+        parser.error(str(error))
     failures = []
     for path, command in commands:
         relative = path.relative_to(project)
         if opts.slurm:
-            cores, memory = notebook_resources(path) or ('1', '8G')
+            cores, memory = resources[path]
             cores = str(opts.cpus or cores)
             memory = opts.mem or memory
             logs = project / 'logs'
@@ -113,6 +119,8 @@ def main(argv=None):
             print(f'Running {relative}', flush=True)
             env = os.environ.copy()
             env['PYTHONNOUSERSITE'] = '1'
+            if 'SLURM_CPUS_PER_TASK' in env:
+                env['LOKY_MAX_CPU_COUNT'] = env['SLURM_CPUS_PER_TASK']
             for key in ['OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUMEXPR_NUM_THREADS']:
                 env[key] = '1'
             if path.suffix == '.ipynb':

@@ -48,3 +48,31 @@ def test_forward_script_arguments(tmp_path, monkeypatch):
     demo_runner.main(['--project', str(tmp_path), '--demo-root', 'demos', '--demo', 'demos/one.py', '--', '--data', 'input.csv'])
     assert calls[0][0][-2:] == ['--data', 'input.csv']
     assert calls[0][1]['cwd'] == tmp_path
+
+
+def test_missing_notebook_resources_stops_all_submissions(tmp_path, monkeypatch):
+    import pytest
+    root = tmp_path / 'examples'
+    root.mkdir()
+    for name, source in [('a', '<!-- HPC_RESOURCES: cpus=4 mem=8G -->'), ('b', 'No resources')]:
+        (root / f'{name}.ipynb').write_text(json.dumps({'cells': [{'cell_type': 'markdown', 'source': [source]}]}))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('No jobs should be submitted before all resources validate')
+    monkeypatch.setattr(demo_runner.subprocess, 'run', forbidden)
+    with pytest.raises(SystemExit, match='2'):
+        demo_runner.main(['--project', str(tmp_path), '--demo-root', 'examples', '--all', '--slurm'])
+
+
+def test_worker_caps_joblib_to_slurm_allocation(tmp_path, monkeypatch):
+    root = tmp_path / 'examples'
+    root.mkdir()
+    (root / 'one.py').write_text('pass')
+    monkeypatch.setenv('SLURM_CPUS_PER_TASK', '4')
+    captured = []
+    def fake_run(command, **kwargs):
+        captured.append(kwargs['env'])
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(demo_runner.subprocess, 'run', fake_run)
+    demo_runner.main(['--project', str(tmp_path), '--demo-root', 'examples', '--all'])
+    assert captured[0]['LOKY_MAX_CPU_COUNT'] == '4'
+    assert captured[0]['OMP_NUM_THREADS'] == '1'
