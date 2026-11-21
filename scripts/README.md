@@ -31,7 +31,8 @@ notebooks. A notebook execution failure leaves its original file unchanged.
 
 Notebook `HPC_RESOURCES` comments set CPU and memory requests. Every notebook
 must have a valid marker in its first Markdown cell; Slurm submission stops
-before any jobs are queued if a marker is missing or invalid. Other demos default
+before any jobs are queued if a marker is missing or invalid. Python demos can
+declare `# HPC_RESOURCES: cpus=32 mem=64G`; those without a marker default
 to 1 CPU and 8G RAM. Override with `--cpus 16 --mem 32G --time 08:00:00`. Set
 `--partition`, `--account`, and `--mail-user` as needed; `HPC_PARTITION`,
 `HPC_ACCOUNT`, `HPC_TIME`, and `MAIL_USER` are also supported. Slurm output and
@@ -48,6 +49,10 @@ with one native library thread per worker to prevent oversubscription. The scrip
 The synthetic PADRE notebook requests **4 CPUs and 8G RAM** for its small
 synthetic dataset and parallel random forests. Resource requests are configured
 budgets, not measured peak requirements; use `--cpus`/`--mem` to tune an actual run.
+
+The full Reddit graphlets example requests **32 CPUs and 64G RAM** in both
+single-demo and all-demo submissions. Its parallel featurization uses the Slurm
+CPU allocation. The time limit remains 8 hours by default.
 
 The batch worker follows the original notebook runner: one node and task,
 `standard` QoS, account `w26_pfas_g`, no GPUs, and no requeue. Use `--account`

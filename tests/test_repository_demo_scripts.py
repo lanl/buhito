@@ -125,6 +125,29 @@ def test_single_demo_submits_by_default(tmp_path, name):
     assert_submissions(record, {relative: expected[relative]})
 
 
+@pytest.mark.parametrize('all_demos,overrides,resources', [
+    (True, [], ('32', '64G')),
+    (False, [], ('32', '64G')),
+    (False, ['--cpus', '16', '--mem', '32G'], ('16', '32G')),
+])
+def test_reddit_demo_requests_parallel_resources(tmp_path, all_demos, overrides, resources):
+    project, expected, record, env = setup_project(tmp_path, 'buhito')
+    relative = 'examples/reddit_example/reddit_graphlets_example.py'
+    target = project / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(BUHITO / relative, target)
+    if all_demos:
+        command = ['bash', str(project / 'scripts/run_all_demos.sh')]
+        expected[relative] = resources
+    else:
+        command = ['bash', str(project / 'scripts/run_demo.sh'), '--demo', relative]
+        expected = {relative: resources}
+    result = subprocess.run([*command, *overrides], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert_submissions(record, expected)
+
+
 @pytest.mark.parametrize('name', ['buhito', 'minervachem'])
 def test_failed_submission_never_executes_demo(tmp_path, name):
     project, _, record, env = setup_project(tmp_path, name)

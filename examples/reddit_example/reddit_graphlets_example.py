@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# HPC_RESOURCES: cpus=32 mem=64G
+
 import argparse
 import os
 from dataclasses import dataclass
@@ -26,7 +28,7 @@ class DataConfig:
 @dataclass
 class FingerprintConfig:
     max_subgraph_size: int = 3
-    n_jobs: int = -3
+    n_jobs: int = int(os.environ.get('SLURM_CPUS_PER_TASK', '-3'))
     chunk_size: str = "auto"   # let GraphletTransformer decide
 
 

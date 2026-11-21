@@ -33,6 +33,20 @@ def notebook_resources(path):
     return match[1], match[2]
 
 
+def demo_resources(path):
+    if path.suffix == '.ipynb':
+        return notebook_resources(path)
+    # Read metadata without importing or executing the Python demo.
+    marker = next((line for line in path.read_text().splitlines()
+                   if line.startswith('# HPC_RESOURCES:')), None)
+    if marker is None:
+        return '1', '8G'
+    match = re.fullmatch(r'# HPC_RESOURCES:\s*cpus=([1-9]\d*)\s+mem=([1-9]\d*[KMGTP])\s*', marker)
+    if match is None:
+        raise ValueError(f'{path}: invalid HPC_RESOURCES comment')
+    return match[1], match[2]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path, required=True)
@@ -74,7 +88,7 @@ def main(argv=None):
         parser.error('Notebook demos do not accept script arguments')
     # Validate every resource marker before submitting any jobs.
     try:
-        resources = {path: notebook_resources(path) or ('1', '8G') for path in demos}
+        resources = {path: demo_resources(path) for path in demos}
     except ValueError as error:
         parser.error(str(error))
     for path in demos:
